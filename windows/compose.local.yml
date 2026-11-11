@@ -1,0 +1,88 @@
+name: aborder-seo-local
+
+x-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-runtime-env: &runtime-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://${POSTGRES_USER:-aborder}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD_required}@db:5432/${POSTGRES_DB:-aborder}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-aborder}
+      POSTGRES_DB: ${POSTGRES_DB:-aborder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD_required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *bounded-logging
+
+  app:
+    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.1.2}
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      <<: *runtime-env
+      WORKER_MODE: "off"
+    ports:
+      # Only this computer can open the app.
+      - "127.0.0.1:${LOCAL_APP_PORT:-3300}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+    logging: *bounded-logging
+
+  worker:
+    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.1.2}
+    restart: unless-stopped
+    command: ["node", "worker.cjs"]
+    env_file:
+      - .env
+    environment:
+      <<: *runtime-env
+      WORKER_MODE: worker
+    depends_on:
+      app:
+        condition: service_healthy
+    stop_grace_period: 40s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "try{const age=Date.now()-require('fs').statSync('/tmp/worker-alive').mtimeMs;process.exit(age<60000?0:1)}catch{process.exit(1)}"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging: *bounded-logging
+
+volumes:
+  pgdata:
+    # Created once by scripts\start.ps1 (after a confirmation) or scripts\migrate-from.ps1, never by
+    # Compose: a renamed project cannot start on an empty database by mistake, and
+    # "docker compose down -v" leaves the data alone.
+    name: ${ABORDER_DB_VOLUME:-aborder-seo-local_pgdata}
+    external: true

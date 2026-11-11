@@ -1,0 +1,42 @@
+# Dependencies and build output
+node_modules/
+.next/
+.vercel/
+coverage/
+test-results/
+playwright-report/
+dist/
+build/
+*.tsbuildinfo
+
+# Instance secrets and authentication
+.env
+.env.*
+!.env.example
+.codex/
+codex/
+auth.json
+private/
+*.dpapi
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Private instance data and backups
+backups/
+reports/
+deployment-info.json
+*.dump
+*.sql.gz
+*.sqlite
+*.sqlite3
+*.db
+*.vhdx
+*.log
+
+# Local tools and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

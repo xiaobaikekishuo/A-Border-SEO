@@ -1,0 +1,864 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============ AUTH ============
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  image         String?
+  googleTokens  Json?     // Google OAuth tokens: accessToken and refreshToken encrypted (lib/google/token-store.ts), the rest plain
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  sites         Site[]
+  alerts        Alert[]
+  apiKeys       ApiKey[]
+  accessKeys    AccessKey[]
+  settings      UserSettings?
+  chatGptProfiles ChatGptProfile[]
+  manusKeywordTasks ManusKeywordTask[]
+}
+
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ============ API KEYS (BYOK) ============
+
+model ApiKey {
+  id                String   @id @default(cuid())
+  userId            String
+  provider          String   // "dataforseo" (login+password) | "google_pagespeed" | "bing" | "manus" (single key)
+  encryptedLogin    String?  // null for single-key providers like google_pagespeed
+  encryptedPassword String   // holds the API key itself for single-key providers
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider])
+}
+
+// ============ ACCESS KEYS (read-only API and MCP) ============
+
+// A key a user creates to read their own data through /api/v1 (lib/api-v1),
+// which the MCP server uses. Only a SHA-256 hash of the key is stored; the
+// key itself is shown once, when it is created. Revoking a key deletes it.
+model AccessKey {
+  id         String    @id @default(cuid())
+  userId     String
+  name       String
+  keyHash    String    @unique // SHA-256 of the whole key, hex
+  prefix     String    // the start of the key, to tell keys apart in Settings
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime? // updated at most once a minute
+
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ============ USER SETTINGS ============
+
+// What a user sets in Settings > Schedule and Settings > Alert webhook.
+model UserSettings {
+  userId             String   @id
+  crawlScheduleDays  Int?     // days between scheduled crawls of each site; null: the server default, 0: off
+  vitalsScheduleDays Int?     // the same for vitals checks
+  webhookUrl         String?  // encrypted (lib/encryption.ts); null: no webhook
+  webhookSecret      String?  // encrypted; signs every delivery
+  mcpEnabled         Boolean  @default(false) // Settings > MCP: access keys work only while this is on
+  alertEmailTo       String?  // Settings > Email alerts: recipients, comma-separated; null: none
+  alertEmailEnabled  Boolean  @default(false) // fired alerts are emailed only while this is on
+  updatedAt          DateTime @updatedAt
+
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============ SITES ============
+
+model Site {
+  id          String   @id @default(cuid())
+  userId      String
+  domain      String   // e.g. "quayline.app"
+  researchLanguage String @default("en")
+  researchLocation Int @default(2840)
+  gscProperty String?  // e.g. "sc-domain:quayline.app"
+  bingSite    String?  // e.g. "https://quayline.app/" (Bing's own URL form)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user          User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  gscSyncCoverage GscSyncCoverage[]
+  queryPages QueryPage[]
+  keywords      Keyword[]
+  pages         Page[]
+  crawls        Crawl[]
+  vitals        VitalsReport[]
+  alerts        Alert[]
+  savedKeywords SavedKeyword[]
+  rankSnapshots RankSnapshot[]
+  bingDaily     BingDaily[]
+  bingWeekly    BingSearchWeekly[]
+  jobs          Job[]
+  contentPillars ContentPillar[]
+  contentClusters ContentCluster[]
+  contentPlanJobs ContentPlanJob[]
+  aiWorkbenchJobs AiWorkbenchJob[]
+  geoSnapshots GeoSnapshot[]
+  geoTracking  GeoTracking?
+  geoPrompts   GeoPrompt[]
+  geoRuns      GeoRun[]
+  geoAnswers   GeoAnswer[]
+  manusKeywordTasks ManusKeywordTask[]
+
+  @@unique([userId, domain])
+}
+
+model ManusKeywordTask {
+  id        String   @id @default(cuid())
+  userId    String
+  siteId    String
+  requestId String
+  input     Json
+  status    String
+  remoteId  String?
+  taskUrl   String?
+  result    String?
+  files     Json     @default("[]")
+  errorCode String?
+  revision  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  preview   ManusKeywordPreview?
+
+  @@unique([userId, siteId, requestId])
+  @@index([userId, siteId, createdAt, id])
+}
+
+model ManusKeywordPreview {
+  taskId   String           @id
+  source   String
+  filename String
+  rows     Json
+  revision Int              @default(1)
+  task     ManusKeywordTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model GeoSnapshot {
+  siteId    String
+  kind      String // GA4, BOT, PROBE (live access check), GSC_AI, BING_AI (imported AI reports)
+  report    Json
+  updatedAt DateTime
+  site      Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@id([siteId, kind])
+}
+
+// ============ GEO PROMPT TRACKING (lib/geo/tracking.ts) ============
+
+/// Prompt tracking settings of a site: whose brand to look for in AI answers,
+/// which platforms to ask through DataForSEO, how often, and the most one run
+/// may spend.
+model GeoTracking {
+  siteId       String   @id
+  brands       Json     // { own: {name, aliases, domains}, competitors: [...] }
+  platforms    String[] // GeoPlatformId values asked through DataForSEO
+  scheduleDays Int?     // null: runs only when started by hand
+  budgetUsd    Float    @default(1)
+  updatedAt    DateTime @updatedAt
+  site         Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+}
+
+model GeoPrompt {
+  id        String      @id @default(cuid())
+  siteId    String
+  text      String
+  tag       String?
+  active    Boolean     @default(true)
+  createdAt DateTime    @default(now())
+  site      Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  answers   GeoAnswer[]
+
+  @@unique([siteId, text])
+}
+
+/// One tracking run: every active prompt on every chosen platform, as one job.
+model GeoRun {
+  id         String      @id @default(cuid())
+  siteId     String
+  jobId      String?     @unique // the job that runs it; a retry of that job resumes the run
+  source     String      // manual or schedule
+  status     String      // RUNNING, SUCCEEDED, PARTIAL, FAILED
+  plan       Json        // { prompts: [id], platforms: [id], market: {language, location} }
+  planned    Int
+  done       Int         @default(0)
+  failed     Int         @default(0)
+  costUsd    Float       @default(0)
+  budgetUsd  Float
+  summary    Json?       // per platform, analysed with the brand settings of the time
+  error      String?
+  errorCode  String?
+  startedAt  DateTime    @default(now())
+  finishedAt DateTime?
+  site       Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  answers    GeoAnswer[]
+
+  @@index([siteId, startedAt])
+}
+
+/// One AI answer to one prompt on one platform: fetched in a run, or recorded by hand (runId null).
+model GeoAnswer {
+  id        String    @id @default(cuid())
+  siteId    String
+  runId     String?
+  promptId  String
+  platform  String
+  source    String    // DATAFORSEO or MANUAL
+  status    String    // OK, NO_ANSWER (the platform gave no AI answer), FAILED
+  text      String?   // the answer, at most 20,000 characters
+  citations Json      // [{url, domain, title, rank}]
+  meta      Json?     // model, sources consulted, fan-out queries, organic rank
+  costUsd   Float     @default(0)
+  error     String?
+  createdAt DateTime  @default(now())
+  site      Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  run       GeoRun?   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  prompt    GeoPrompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, promptId, platform])
+  @@index([siteId, createdAt])
+  @@index([promptId, platform, createdAt])
+}
+
+enum ContentFunnel {
+  TOFU
+  MOFU
+  BOFU
+}
+
+enum ContentStatus {
+  PLANNED
+  BRIEF_READY
+  WRITING
+  REVIEW
+  PUBLISHED
+}
+
+enum ContentSource {
+  MANUAL
+  AI
+  EXAMPLE
+}
+
+enum ContentJobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model ContentPillar {
+  id String @id @default(cuid())
+  siteId String
+  title String
+  keyword String
+  description String @default("")
+  audience String @default("")
+  goal String @default("")
+  url String?
+  source ContentSource @default(MANUAL)
+  seedKey String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  clusters ContentCluster[]
+  jobs ContentPlanJob[]
+  @@unique([siteId, seedKey])
+  @@index([siteId, createdAt])
+}
+
+model ContentCluster {
+  id String @id @default(cuid())
+  siteId String
+  pillarId String
+  title String
+  keyword String
+  dedupeKey String
+  funnel ContentFunnel
+  intent String @default("")
+  contentType String @default("Guide")
+  status ContentStatus @default(PLANNED)
+  url String?
+  scheduledFor DateTime?
+  optimization Json?
+  brief Json?
+  source ContentSource @default(MANUAL)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  pillar ContentPillar @relation(fields: [pillarId], references: [id], onDelete: Cascade)
+  @@unique([pillarId, dedupeKey])
+  @@index([siteId, status])
+}
+
+model ContentPlanJob {
+  usage Json?
+  kind String @default("PLAN")
+  request Json?
+  id String @id @default(cuid())
+  siteId String
+  pillarId String
+  status ContentJobStatus @default(QUEUED)
+  topicCount Int @default(9)
+  result Json?
+  context Json?
+  error String?
+  activeKey String? @unique
+  appliedAt DateTime?
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  createdAt DateTime @default(now())
+  startedAt DateTime?
+  finishedAt DateTime?
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  pillar ContentPillar @relation(fields: [pillarId], references: [id], onDelete: Cascade)
+  @@index([siteId, createdAt])
+  @@index([status, createdAt])
+}
+
+model ContentWorkerState {
+  id String @id
+  lastSeenAt DateTime @default(now())
+}
+
+model ChatGptHost {
+  id String @id
+  hostId String @unique
+}
+
+model ChatGptProfile {
+  id String @id @default(cuid())
+  userId String
+  clientId String?
+  subject String?
+  email String?
+  encryptedTokens String? @db.Text
+  scopes String[] @default([])
+  expiresAt DateTime?
+  selected Boolean @default(false)
+  epoch Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  attempts ChatGptLoginAttempt[]
+  @@index([userId, createdAt])
+}
+
+model ChatGptLoginAttempt {
+  stateHash String @id
+  userId String
+  profileId String
+  epoch Int
+  encryptedPending String @db.Text
+  expiresAt DateTime
+  returnPath String
+  profile ChatGptProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  @@index([expiresAt])
+}
+
+model ChatGptInference {
+  jobId String @id
+  createdAt DateTime @default(now())
+  job AiWorkbenchJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+}
+
+model AiWorkbenchJob {
+  usage Json?
+  id String @id
+  siteId String
+  kind String
+  title String
+  status ContentJobStatus @default(QUEUED)
+  request Json
+  context Json
+  result Json?
+  draftText String? @db.Text
+  error String?
+  activeKey String? @unique
+  leaseToken String?
+  leaseExpiresAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  startedAt DateTime?
+  finishedAt DateTime?
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  appInference ChatGptInference?
+  @@index([siteId, createdAt])
+  @@index([status, createdAt])
+}
+
+// ============ GSC DATA ============
+
+model Keyword {
+  id          String   @id @default(cuid())
+  siteId      String
+  query       String   // The search query
+  date        DateTime // Date of the data point
+  clicks      Int      @default(0)
+  impressions Int      @default(0)
+  ctr         Float    @default(0)
+  position    Float    @default(0)
+  page        String?  // Landing page URL
+  device      String?  // DESKTOP, MOBILE, TABLET
+  country     String?  // Country code
+
+  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, query, date])
+  @@index([siteId, date])
+  @@index([siteId, query, date])
+}
+
+model Page {
+  id          String   @id @default(cuid())
+  siteId      String
+  url         String
+  date        DateTime
+  clicks      Int      @default(0)
+  impressions Int      @default(0)
+  ctr         Float    @default(0)
+  position    Float    @default(0)
+
+  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, url, date])
+  @@index([siteId, date])
+  @@index([siteId, url, date])
+}
+
+// ============ BING WEBMASTER DATA ============
+
+/// Bing's daily grain: site traffic (GetRankAndTrafficStats) and crawler stats
+/// (GetCrawlStats) share one row because both are keyed by (site, day).
+/// Kept apart from Keyword/Page so no existing Google query changes meaning.
+model BingDaily {
+  id              String   @id @default(cuid())
+  siteId          String
+  date            DateTime
+  clicks          Int?
+  impressions     Int?
+  crawledPages    Int?
+  inIndex         Int?
+  inLinks         Int?
+  code2xx         Int?
+  code301         Int?
+  code302         Int?
+  code4xx         Int?
+  code5xx         Int?
+  blockedByRobots Int?
+  crawlErrors     Int?
+
+  site            Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, date])
+}
+
+/// Bing's weekly grain: GetQueryStats and GetPageStats return the same contract
+/// in buckets ending on a Friday, so `kind` distinguishes them.
+model BingSearchWeekly {
+  id                    String   @id @default(cuid())
+  siteId                String
+  kind                  String   // "query" | "page"
+  key                   String   // the search query, or the page URL
+  weekEnding            DateTime
+  clicks                Int?     // null when Bing left the counter out
+  impressions           Int?
+  avgImpressionPosition Float?
+
+  site                  Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, kind, key, weekEnding])
+  @@index([siteId, kind, weekEnding])
+}
+
+// ============ SAVED KEYWORDS ============
+
+model SavedKeyword {
+  id        String   @id @default(cuid())
+  siteId    String
+  query     String
+  notes     String?
+  createdAt DateTime @default(now())
+
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, query])
+  @@index([siteId])
+}
+
+// ============ RANK TRACKING ============
+
+model RankSnapshot {
+  id          String   @id @default(cuid())
+  siteId      String
+  query       String
+  position    Float
+  clicks      Int      @default(0)
+  impressions Int      @default(0)
+  page        String?
+  date        DateTime
+
+  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, query, date])
+  @@index([siteId, date])
+  @@index([siteId, query, date])
+}
+
+// ============ CRAWLER ============
+
+model Crawl {
+  id          String      @id @default(cuid())
+  siteId      String
+  status      CrawlStatus @default(PENDING)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  pagesFound  Int         @default(0)
+  issuesFound Int         @default(0)
+  healthScore Int?        // 0-100
+  // How healthScore was computed (lib/crawler/audit-policy.ts). Null: the legacy 8/3/1 deduction.
+  healthScoreVersion String?
+  maxPages    Int         @default(200)
+  // Set when the crawl is created and each time it makes progress. A RUNNING
+  // crawl that stops updating it was interrupted.
+  lastProgressAt DateTime?
+  error       String?     // why a FAILED crawl failed
+
+  site        Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  issues      CrawlIssue[]
+  auditPages  AuditPage[]
+  auditLinks  AuditLink[]
+  jobs        Job[]
+
+  @@index([siteId, startedAt])
+}
+
+enum CrawlStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ============ AUDIT PAGE DATA ============
+
+model AuditPage {
+  articleText String?
+  articleHeadings Json?
+  id              String  @id @default(cuid())
+  crawlId         String
+  url             String
+  statusCode      Int
+  redirectUrl     String?
+
+  title           String?
+  description     String?
+  canonical       String?
+  robotsMeta      String?
+
+  h1Count         Int     @default(0)
+  h1s             Json?   // Array of H1 text
+  wordCount       Int     @default(0)
+
+  imageCount      Int     @default(0)
+  imagesMissingAlt Int    @default(0)
+
+  internalLinks   Int     @default(0)
+  externalLinks   Int     @default(0)
+
+  hasSchema       Boolean @default(false)
+  schemaReport    Json?   // Bounded captured JSON-LD checks; null means not checked.
+  hreflangTags    Json?   // Array of hreflang values
+
+  contentScore    Int     @default(0)  // 0-100
+  contentHash     String? // SHA-256 of body text
+
+  responseTimeMs  Int     @default(0)
+  byteSize        Int     @default(0)
+  // False when the page is noindex: meta robots/googlebot or X-Robots-Tag.
+  // Such a page is crawled and its links followed, but it is kept out of the
+  // health score and the issues.
+  indexable       Boolean @default(true)
+  noindexSource   String? // "meta", "x-robots-tag" or both, comma-joined
+  xRobotsTag      String? // the X-Robots-Tag header lines as received, newline-separated
+  // Robots-type meta tags ([name, content], robots/googlebot/bingbot/msnbot)
+  // and whether a data-nosnippet attribute is present; null on older crawls.
+  robotsDirectives Json?
+
+  crawl           Crawl   @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+
+  @@index([crawlId])
+  @@index([crawlId, url])
+}
+
+// ============ AUDIT LINK GRAPH ============
+
+model AuditLink {
+  id          String  @id @default(cuid())
+  crawlId     String
+  sourceUrl   String
+  targetUrl   String
+  anchorText  String?
+  isInternal  Boolean @default(true)
+  isNofollow  Boolean @default(false)
+  statusCode  Int?
+
+  crawl       Crawl   @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+
+  @@index([crawlId])
+  @@index([crawlId, sourceUrl])
+}
+
+model CrawlIssue {
+  id          String        @id @default(cuid())
+  crawlId     String
+  url         String
+  type        IssueType
+  severity    IssueSeverity
+  message     String
+  details     Json?         // Additional context
+
+  crawl       Crawl         @relation(fields: [crawlId], references: [id], onDelete: Cascade)
+
+  @@index([crawlId, type])
+}
+
+enum IssueType {
+  BROKEN_LINK           // 404, 500, etc.
+  REDIRECT              // 301, 302 chains
+  MISSING_TITLE         // No <title> tag
+  MISSING_DESCRIPTION   // No meta description
+  DUPLICATE_TITLE       // Same title on multiple pages
+  DUPLICATE_DESCRIPTION // Same description on multiple pages
+  MISSING_H1            // No H1 heading
+  MULTIPLE_H1           // More than one H1
+  MISSING_ALT           // Images without alt text
+  MISSING_CANONICAL     // No canonical tag
+  MISSING_ROBOTS        // No robots.txt
+  MISSING_SITEMAP       // No sitemap.xml
+  MISSING_SCHEMA        // No structured data
+  SLOW_PAGE             // Load time > 3s
+  MIXED_CONTENT         // HTTP resources on HTTPS page
+  LARGE_PAGE            // Page size > 3MB
+}
+
+enum IssueSeverity {
+  CRITICAL
+  WARNING
+  INFO
+}
+
+// ============ CORE WEB VITALS ============
+
+model VitalsReport {
+  id          String   @id @default(cuid())
+  siteId      String
+  url         String
+  date        DateTime @default(now())
+  device      String   // MOBILE or DESKTOP
+
+  // Core Web Vitals
+  lcp         Float?   // Largest Contentful Paint (seconds)
+  fid         Float?   // First Input Delay (milliseconds)
+  cls         Float?   // Cumulative Layout Shift (score)
+  inp         Float?   // Interaction to Next Paint (milliseconds)
+
+  // Performance
+  perfScore   Int?     // 0-100 Lighthouse performance score
+  speedIndex  Float?   // Speed Index (seconds)
+  ttfb        Float?   // Time to First Byte (seconds)
+
+  site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@index([siteId, date])
+  @@index([siteId, url, date])
+}
+
+// ============ ALERTS ============
+
+model Alert {
+  id          String     @id @default(cuid())
+  userId      String
+  siteId      String
+  type        AlertType
+  channel     AlertChannel
+  config      Json       // Thresholds, webhook URL, etc.
+  enabled     Boolean    @default(true)
+  lastFired   DateTime?
+  createdAt   DateTime   @default(now())
+
+  user        User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site        Site       @relation(fields: [siteId], references: [id], onDelete: Cascade)
+}
+
+enum AlertType {
+  TRAFFIC_DROP       // Clicks dropped > X%
+  POSITION_CHANGE    // Keyword position changed > X
+  NEW_404            // New broken links detected
+  VITALS_DEGRADED    // Core Web Vitals got worse
+  CRAWL_ISSUES       // New crawl issues detected
+  NOINDEX_SITEWIDE   // Most fetched pages of the latest crawl are noindex
+}
+
+enum AlertChannel {
+  EMAIL
+  TELEGRAM
+  WEBHOOK
+  SLACK
+}
+
+// ============================================
+// JOB QUEUE (lib/jobs)
+// ============================================
+
+// Background work: crawls, vitals checks, syncs, alert evaluation. Claimed by
+// the app (WORKER_MODE=inline) or the worker process with FOR UPDATE SKIP
+// LOCKED, retried with backoff, and taken back when the process running it
+// stops sending heartbeats.
+model Job {
+  id          String    @id @default(cuid())
+  siteId      String
+  type        String    // a type registered in lib/jobs/handlers.ts
+  status      JobStatus @default(QUEUED)
+  source      String    // "manual" | "mcp" | "schedule" | "chain" | "site-added"
+  priority    Int       @default(0) // higher runs first
+  payload     Json?
+  result      Json?
+  attempts    Int       @default(0)
+  maxAttempts Int
+  runAt       DateTime  @default(now()) // not before
+  activeKey   String?   @unique // "<type>:<siteId>" while QUEUED or RUNNING, null once finished
+  lockedBy    String?   // id of the process running it
+  lockedAt    DateTime?
+  heartbeatAt DateTime?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  lastError   String?
+  errorCode   String?   // e.g. REAUTH_REQUIRED, QUOTA_EXCEEDED
+  crawlId     String?   // the crawl row of the latest attempt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  site        Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  crawl       Crawl?    @relation(fields: [crawlId], references: [id], onDelete: SetNull)
+
+  @@index([status, runAt])
+  @@index([siteId, type, createdAt])
+  @@index([crawlId])
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+// One row per process that processes jobs, so the app can tell whether
+// anything picks up queued jobs. Holds no user data.
+model WorkerHeartbeat {
+  id         String   @id // the process id used in Job.lockedBy
+  mode       String   // "inline" | "worker"
+  hostname   String
+  version    String
+  startedAt  DateTime
+  lastSeenAt DateTime
+
+  @@index([lastSeenAt])
+}
+
+
+// The scheduler's own timestamps (lib/jobs/scheduler.ts). Holds no user data.
+// "firstSeenAt:<type>": the first pass that could schedule that job type; a
+// site's first scheduled crawl and vitals check are spread over the interval
+// after it. "lastRunAt": the last scheduling pass, so processes share one.
+model SchedulerState {
+  key String   @id
+  at  DateTime
+}
+
+// Successful retrieval of API-reported data, including zero-row dates.
+// Legacy records have no coverage evidence until a successful refresh.
+model GscSyncCoverage {
+  id String @id @default(cuid())
+  siteId String
+  date DateTime
+  gscProperty String
+  pagesComplete Boolean @default(false)
+  queryPagesComplete Boolean @default(false)
+  syncedAt DateTime @default(now())
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  @@unique([siteId, date])
+  @@index([siteId, date])
+}
+
+model QueryPage {
+  id String @id @default(cuid())
+  siteId String
+  query String
+  page String
+  date DateTime
+  clicks Int @default(0)
+  impressions Int @default(0)
+  ctr Float @default(0)
+  position Float @default(0)
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  @@unique([siteId, query, page, date])
+  @@index([siteId, date])
+}

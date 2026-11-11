@@ -1,0 +1,47 @@
+.panel { padding: 1.4rem; margin-bottom: 1.5rem; }
+.panel h2 { font-size: 1.1rem; font-weight: 650; color: var(--text-strong); }
+.heading { display: flex; align-items: flex-start; gap: .75rem; margin-bottom: 1.2rem; }
+.heading > svg { flex-shrink: 0; color: var(--primary); margin-top: .2rem; }
+.heading p, .note { color: var(--muted-foreground); font-size: .85rem; line-height: 1.7; }
+.heading p { margin-top: .35rem; }
+.form { display: flex; align-items: flex-end; gap: .8rem; margin-bottom: 1.2rem; }
+.form label { flex: 1; min-width: 0; display: grid; gap: .5rem; font-size: .9rem; }
+.form input { width: 100%; min-width: 0; background: var(--background); border: 1px solid var(--border); border-radius: .7rem; padding: .8rem 1rem; color: var(--foreground); }
+.form input:focus-visible, .form button:focus-visible, .details summary:focus-visible, .links a:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+.form button { display: flex; gap: .5rem; align-items: center; justify-content: center; min-height: 3rem; padding: .75rem 1rem; border: 1px solid var(--primary); border-radius: .7rem; color: white; background: var(--primary); font-size: .9rem; }
+.form button:disabled { opacity: .5; cursor: not-allowed; }
+.note { display: flex; gap: .5rem; align-items: flex-start; margin-top: .85rem; overflow-wrap: anywhere; }
+.note svg { flex-shrink: 0; margin-top: .25rem; }
+.error { border: 1px solid var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); border-radius: .7rem; padding: .9rem; margin-top: 1rem; }
+.empty { margin: 1.5rem 0; padding: 2.5rem; text-align: center; }
+.empty svg { margin: 0 auto 1rem; color: var(--primary); }
+.empty h2 { font-size: 1.2rem; margin-bottom: .7rem; }
+.empty p { max-width: 42rem; margin: 0 auto; color: var(--muted-foreground); line-height: 1.8; font-size: .9rem; }
+.links { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 1rem; }
+.links a { display: inline-flex; gap: .4rem; align-items: center; color: var(--primary); font-size: .9rem; }
+.url { overflow-wrap: anywhere; font-size: .9rem; color: var(--primary); margin: .7rem 0 1.2rem; }
+.facts { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 1rem; margin-bottom: 1.4rem; }
+.facts > div { background: var(--background); border: 1px solid var(--border); border-radius: .8rem; padding: 1rem; }
+.facts span { display: block; font-size: .8rem; color: var(--muted-foreground); margin-bottom: .4rem; }
+.facts strong { font-size: 1.3rem; font-weight: 600; }
+.tableWrap { overflow-x: auto; }
+.tableWrap table { width: 100%; min-width: 650px; border-collapse: collapse; font-size: .85rem; }
+.tableWrap caption { text-align: left; color: var(--muted-foreground); font-size: .8rem; padding-bottom: .9rem; }
+.tableWrap th, .tableWrap td { border-bottom: 1px solid var(--border); text-align: left; padding: .9rem .7rem; vertical-align: top; }
+.tableWrap th { color: var(--muted-foreground); font-weight: 500; }
+.tableWrap th:first-child, .tableWrap td:first-child { padding-left: 0; }
+.tableWrap code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.tableWrap small { display: block; margin-top: .35rem; color: var(--muted-foreground); }
+.allowed, .blocked, .unknown { display: inline-block; border-radius: .4rem; padding: .25rem .5rem; font-size: .8rem; }
+.allowed { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.blocked { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.unknown { color: var(--muted-foreground); background: var(--background); }
+.saved { margin: 1.4rem 0; border: 1px solid var(--border); border-radius: .8rem; padding: 1.1rem; font-size: .9rem; line-height: 1.8; }
+.saved h3 { font-weight: 600; }
+.saved dl { display: grid; grid-template-columns: minmax(7rem,auto) 1fr; gap: .3rem 1rem; margin-top: .8rem; }
+.saved dt { color: var(--muted-foreground); }
+.saved dd { overflow-wrap: anywhere; white-space: pre-wrap; }
+.details { font-size: .85rem; color: var(--muted-foreground); }
+.details summary { cursor: pointer; color: var(--primary); }
+.details ul { padding-left: 1.5rem; margin-top: .75rem; line-height: 1.8; list-style: disc; }
+@media(max-width: 680px) { .panel { padding: 1rem; } .form { align-items: stretch; flex-direction: column; } .facts { grid-template-columns: 1fr; gap: .6rem; } .empty { padding: 1.7rem 1rem; } }

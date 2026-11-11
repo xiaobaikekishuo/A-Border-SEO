@@ -1,0 +1,212 @@
+"use client";
+
+import { useUiText, identityUiText, type UiTranslator } from "@/components/ui/ui-text";
+
+
+import { useState } from "react";
+import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { positionBand, formatPosition, formatCtr } from "@/lib/seo-metrics";
+
+export function PositionBadge({ position }: { position: number }) {
+  const band = positionBand(position);
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-12 items-center justify-center rounded-md px-2 py-0.5 font-data text-[12px]",
+        band === "top3" && "rank-top3",
+        band === "top10" && "rank-top10",
+        band === "top20" && "rank-top20",
+        band === "deep" && "rank-deep"
+      )}
+    >
+      {formatPosition(position)}
+    </span>
+  );
+}
+
+export type SortDir = "asc" | "desc";
+export interface SortState {
+  key: string;
+  dir: SortDir;
+}
+export interface MetricHeader {
+  label: string;
+  align?: "left" | "right";
+  /** Present ⇒ the header is clickable and sorts by this key */
+  sortKey?: string;
+  /** Direction applied on first click (default "desc"; use "asc" for position/text) */
+  defaultDir?: SortDir;
+}
+
+/** Shared sort-state hook: click same column ⇒ flip, new column ⇒ its default dir. */
+export function useTableSort(initial: SortState) {
+  const [sort, setSort] = useState<SortState>(initial);
+  function toggle(key: string, defaultDir: SortDir = "desc") {
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: defaultDir }
+    );
+  }
+  return { sort, setSort, toggle };
+}
+
+/** Human label for the active sort, for footers ("Score", not "perfScore"). */
+export function sortLabel(headers: MetricHeader[], sort: SortState, ui: UiTranslator = identityUiText): string {
+  const label = headers.find((h) => h.sortKey === sort.key)?.label ?? sort.key;
+  return `${ui(label).toLowerCase()} ${ui(sort.dir === "asc" ? "ascending" : "descending")}`;
+}
+
+/** Generic comparator: numbers numerically, strings via localeCompare, null/undefined last. */
+export function sortRows<T>(rows: T[], sort: SortState): T[] {
+  const { key, dir } = sort;
+  const mul = dir === "asc" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const va = (a as Record<string, unknown>)[key];
+    const vb = (b as Record<string, unknown>)[key];
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    if (typeof va === "number" && typeof vb === "number") return (va - vb) * mul;
+    return String(va).localeCompare(String(vb)) * mul;
+  });
+}
+
+export function MetricTable({
+  headers,
+  children,
+  footer,
+  sort,
+  onSort,
+}: {
+  headers: MetricHeader[];
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+  sort?: SortState;
+  onSort?: (key: string, defaultDir?: SortDir) => void;
+}) {
+  const ui = useUiText();
+  return (
+    <div className="panel overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[640px] text-[13px]">
+          <thead>
+            <tr className="border-b border-border bg-bg-soft">
+              {headers.map((h) => {
+                const sortable = h.sortKey != null && onSort != null;
+                const active = sortable && sort?.key === h.sortKey;
+                return (
+                  <th
+                    key={h.label}
+                    aria-sort={
+                      active ? (sort!.dir === "asc" ? "ascending" : "descending") : undefined
+                    }
+                    className={cn(
+                      "mono-label px-4 py-3.5 text-[11px] font-normal text-muted-foreground",
+                      h.align === "right" ? "text-right" : "text-left"
+                    )}
+                  >
+                    {sortable ? (
+                      <button
+                        type="button"
+                        onClick={() => onSort!(h.sortKey!, h.defaultDir)}
+                        className={cn(
+                          "mono-label inline-flex items-center gap-1 transition-colors hover:text-text-strong",
+                          active && "text-text-strong"
+                        )}
+                        title={ui("Sort by {0}", { "0": ui(h.label) })}
+                      >
+                        {ui(h.label)}
+                        {active ? (
+                          sort!.dir === "asc" ? (
+                            <ChevronUp className="size-3" aria-hidden />
+                          ) : (
+                            <ChevronDown className="size-3" aria-hidden />
+                          )
+                        ) : (
+                          <ChevronsUpDown className="size-3 text-text-faint" aria-hidden />
+                        )}
+                      </button>
+                    ) : (
+                      ui(h.label)
+                    )}
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border-soft [&>tr]:transition-colors [&>tr:hover]:bg-bg-section/60">{children}</tbody>
+        </table>
+      </div>
+      {footer && (
+        <div className="border-t border-border bg-bg-soft px-4 py-3 text-[12px] text-muted-foreground">
+          {footer}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export const filterInputClass =
+  "h-[38px] rounded-md border border-input bg-bg-soft px-3 text-[14px] text-text-strong placeholder:text-muted-foreground focus:border-brand-500 focus:bg-bg focus:outline-none focus:ring-2 focus:ring-brand-500/20";
+
+/** Shared search field used above every metric table. */
+export function SearchField({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  const ui = useUiText();
+  return (
+    <label className="flex min-w-56 flex-1 flex-col gap-1">
+      <span className="mono-label text-[11px] text-muted-foreground">
+        {ui("Search")}</span>
+      <input
+        type="search"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder ?? ui("Filter...")}
+        className={filterInputClass}
+      />
+    </label>
+  );
+}
+
+export type PositionFilter = "all" | "top3" | "top10" | "11-20" | "20+";
+
+export const POSITION_OPTIONS: { value: PositionFilter; label: string }[] = [
+  { value: "all", label: "All positions" },
+  { value: "top3", label: "Top 3" },
+  { value: "top10", label: "Top 10" },
+  { value: "11-20", label: "11–20" },
+  { value: "20+", label: "20+" },
+];
+
+export function matchesPosition(position: number, filter: PositionFilter): boolean {
+  if (filter === "all") return true;
+  if (filter === "top3") return position > 0 && position <= 3;
+  if (filter === "top10") return position > 0 && position <= 10;
+  if (filter === "11-20") return position > 10 && position <= 20;
+  return position > 20;
+}
+
+export function parseMin(value: string): number | null {
+  if (value.trim() === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
+export function CtrCell({ ctr }: { ctr: number }) {
+  return <span className="font-data text-text">{formatCtr(ctr)}</span>;
+}
+
+export function NumCell({ value }: { value: number }) {
+  return (
+    <span className="font-data text-text">{value.toLocaleString()}</span>
+  );
+}

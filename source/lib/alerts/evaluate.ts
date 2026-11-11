@@ -1,0 +1,178 @@
+import { db } from "@/lib/db";
+import { getSitePeriodMetrics } from "@/lib/seo-metrics";
+import { getContentDecay } from "@/lib/seo-opportunities";
+import { getNoindexWarning } from "@/lib/crawler/noindex-warning";
+import type { AlertType, Prisma } from "@prisma/client";
+
+export type AlertFire = {
+  alertId: string;
+  type: string;
+  message: string;
+  siteId: string;
+  domain: string;
+  /** When the alert fired before this evaluation, null if never. */
+  previousFiredAt?: string | null;
+};
+
+/**
+ * Evaluate enabled alerts for a user, or only those of one of their sites.
+ * Lightweight rules for v1.
+ */
+export async function evaluateAlertsForUser(
+  userId: string,
+  opts: { siteId?: string } = {}
+): Promise<AlertFire[]> {
+  const alerts = await db.alert.findMany({
+    where: { userId, enabled: true, ...(opts.siteId && { siteId: opts.siteId }) },
+    include: { site: { select: { id: true, domain: true } } },
+  });
+
+  const fires: AlertFire[] = [];
+
+  // Two rows of one type on one site (ensureDefaultAlerts racing itself) fire once.
+  const seen = new Set<string>();
+
+  for (const alert of alerts) {
+    const key = `${alert.siteId}:${alert.type}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const config = (alert.config || {}) as {
+      thresholdPct?: number;
+      thresholdPositions?: number;
+    };
+
+    try {
+      if (alert.type === "TRAFFIC_DROP") {
+        const { deltas, current } = await getSitePeriodMetrics(alert.siteId, 7);
+        const threshold = config.thresholdPct ?? -20;
+        if (deltas.clicks !== null && deltas.clicks <= threshold && current.clicks >= 5) {
+          fires.push({
+            alertId: alert.id,
+            type: alert.type,
+            siteId: alert.siteId,
+            domain: alert.site.domain,
+            message: `Traffic drop on ${alert.site.domain}: clicks ${deltas.clicks.toFixed(1)}% vs prior week`,
+          });
+        }
+      }
+
+      if (alert.type === "POSITION_CHANGE") {
+        const { deltas } = await getSitePeriodMetrics(alert.siteId, 28);
+        // avgPosition delta: positive = improved; fire when worsened (negative)
+        const threshold = config.thresholdPositions ?? -2;
+        if (deltas.avgPosition !== null && deltas.avgPosition <= threshold) {
+          fires.push({
+            alertId: alert.id,
+            type: alert.type,
+            siteId: alert.siteId,
+            domain: alert.site.domain,
+            message: `Avg position worsened by ${Math.abs(deltas.avgPosition).toFixed(1)} on ${alert.site.domain}`,
+          });
+        }
+      }
+
+      if (alert.type === "CRAWL_ISSUES") {
+        const latest = await db.crawl.findFirst({
+          where: { siteId: alert.siteId, status: "COMPLETED" },
+          orderBy: { finishedAt: "desc" },
+        });
+        if (latest && (latest.healthScore ?? 100) < 70) {
+          fires.push({
+            alertId: alert.id,
+            type: alert.type,
+            siteId: alert.siteId,
+            domain: alert.site.domain,
+            message: `Crawl health ${latest.healthScore}/100 on ${alert.site.domain} (${latest.issuesFound} issues)`,
+          });
+        }
+      }
+
+      if (alert.type === "NOINDEX_SITEWIDE") {
+        const latest = await db.crawl.findFirst({
+          where: { siteId: alert.siteId, status: "COMPLETED" },
+          orderBy: { finishedAt: "desc" },
+          select: { id: true },
+        });
+        const warning = latest ? await getNoindexWarning(db, latest.id) : null;
+        if (warning) {
+          fires.push({
+            alertId: alert.id,
+            type: alert.type,
+            siteId: alert.siteId,
+            domain: alert.site.domain,
+            message: `Most pages are noindex on ${alert.site.domain}: ${warning.message}`,
+          });
+        }
+      }
+
+      if (alert.type === "VITALS_DEGRADED") {
+        const recent = await db.vitalsReport.findMany({
+          where: { siteId: alert.siteId },
+          orderBy: { date: "desc" },
+          take: 5,
+        });
+        const bad = recent.filter(
+          (v) => (v.lcp && v.lcp > 2.5) || (v.cls && v.cls > 0.1) || (v.perfScore && v.perfScore < 50)
+        );
+        if (bad.length >= 2) {
+          fires.push({
+            alertId: alert.id,
+            type: alert.type,
+            siteId: alert.siteId,
+            domain: alert.site.domain,
+            message: `Core Web Vitals degraded on ${alert.site.domain} (${bad.length} recent poor reports)`,
+          });
+        }
+      }
+
+      // Bonus: content decay as traffic signal
+      if (alert.type === "TRAFFIC_DROP") {
+        const decay = await getContentDecay(alert.siteId, 3);
+        if (decay[0] && decay[0].changePct < -40) {
+          // already may have fired; skip duplicate style
+        }
+      }
+    } catch (err) {
+      console.error(`Alert ${alert.id} failed:`, err);
+    }
+  }
+
+  // Mark fired
+  const now = new Date();
+  const before = new Map(alerts.map((a) => [a.id, a.lastFired]));
+  for (const fire of fires) {
+    fire.previousFiredAt = before.get(fire.alertId)?.toISOString() ?? null;
+    await db.alert.update({
+      where: { id: fire.alertId },
+      data: { lastFired: now },
+    });
+  }
+
+  return fires;
+}
+
+/** The alerts every site gets, all on. */
+const DEFAULT_ALERTS: { type: AlertType; config: Prisma.InputJsonValue }[] = [
+  { type: "TRAFFIC_DROP", config: { thresholdPct: -20 } },
+  { type: "POSITION_CHANGE", config: { thresholdPositions: -2 } },
+  { type: "CRAWL_ISSUES", config: {} },
+  { type: "VITALS_DEGRADED", config: {} },
+  { type: "NOINDEX_SITEWIDE", config: {} },
+];
+
+/**
+ * Adds the default alerts a site does not have yet: all of them for a new
+ * site, and a type added in a later release for an existing one. An alert
+ * the user turned off stays off. With `newTypesOnly`, a site without any
+ * alert gets none.
+ */
+export async function ensureDefaultAlerts(userId: string, siteId: string, opts: { newTypesOnly?: boolean } = {}) {
+  const existing = await db.alert.findMany({ where: { userId, siteId }, select: { type: true } });
+  if (opts.newTypesOnly && existing.length === 0) return;
+  const have = new Set(existing.map((a) => a.type));
+  const missing = DEFAULT_ALERTS.filter((a) => !have.has(a.type));
+  if (missing.length === 0) return;
+  await db.alert.createMany({
+    data: missing.map((a) => ({ userId, siteId, type: a.type, channel: "EMAIL" as const, config: a.config })),
+  });
+}

@@ -1,0 +1,414 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+ * Local navy workspace theme, shared by every route and portalled control.
+ * Violet is the action accent; cyan distinguishes the second chart series.
+ * Semantic text, surface and state tokens keep tables and forms readable.
+ * The original orange brand mark is retained in the logo component.
+ */
+
+@theme inline {
+  /* Surfaces and text */
+  --color-bg: var(--bg);
+  --color-bg-soft: var(--bg-soft);
+  --color-bg-section: var(--bg-section);
+  --color-text: var(--text);
+  --color-text-strong: var(--text-strong);
+  --color-text-muted: var(--text-muted);
+  --color-text-soft: var(--text-soft);
+  --color-text-faint: var(--text-faint);
+  --color-line-strong: var(--line-strong);
+  --color-border-soft: var(--border-soft);
+
+  /* Accent scale: dark violet surfaces through bright text accents */
+  --color-brand-50: var(--brand-50);
+  --color-brand-100: var(--brand-100);
+  --color-brand-200: var(--brand-200);
+  --color-brand-300: var(--brand-300);
+  --color-brand-400: var(--brand-400);
+  --color-brand-500: var(--brand-500);
+  --color-brand-600: var(--brand-600);
+  --color-brand-700: var(--brand-700);
+  --color-brand-800: var(--brand-800);
+  --color-brand-900: var(--brand-900);
+  --color-brand-950: var(--brand-950);
+
+  /* Inset surface for code and callouts */
+  --color-ink: var(--ink);
+  --color-ink-text: var(--ink-text);
+  --color-ink-lead: var(--ink-lead);
+
+  /* Buttons */
+  --color-button-primary: var(--button-primary);
+  --color-button-primary-hover: var(--button-primary-hover);
+  --color-button-secondary: var(--button-secondary);
+  --color-button-secondary-hover: var(--button-secondary-hover);
+
+  /* States */
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+
+  /* shadcn names, mapped onto the tokens above */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+
+  /* Type: Inter for UI and text, Geist Mono for uppercase labels, buttons and numbers */
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+  --tracking-label: 0.06em;
+
+  /* Rounded controls and larger workspace cards */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 10px;
+  --radius-xl: 16px;
+  --radius-2xl: 18px;
+  --radius-3xl: 22px;
+
+  --shadow-atom-1: var(--shadow-1);
+  --shadow-atom-2: var(--shadow-2);
+  --shadow-atom-3: var(--shadow-3);
+}
+
+/*
+ * Fonts. The faces are self-hosted by app/fonts.ts. The fallbacks are Arial
+ * scaled to each font's metrics (the values next/font/google generated), so
+ * text does not shift when the font arrives.
+ */
+@font-face {
+  font-family: "Inter Fallback";
+  src: local("Arial");
+  ascent-override: 90.44%;
+  descent-override: 22.52%;
+  line-gap-override: 0%;
+  size-adjust: 107.12%;
+}
+
+@font-face {
+  font-family: "Geist Mono Fallback";
+  src: local("Arial");
+  ascent-override: 74.67%;
+  descent-override: 21.92%;
+  line-gap-override: 0%;
+  size-adjust: 134.59%;
+}
+
+:root {
+  color-scheme: dark;
+
+  --font-inter: "Inter", "Inter Fallback";
+  --font-geist-mono: "Geist Mono", "Geist Mono Fallback";
+
+  --bg: #080e1c;
+  --bg-soft: #0d1526;
+  --bg-section: #19243a;
+  --text: #e0e8f5;
+  --text-strong: #f0f4fc;
+  --text-muted: #9aaecb;
+  --text-soft: #92a4bf;
+  --text-faint: #8799b4;
+  --border-color: #2b3952;
+  --border-soft: #223047;
+  --line-strong: #526684;
+
+  --brand-50: #17172f;
+  --brand-100: #24203f;
+  --brand-200: #39315e;
+  --brand-300: #62539a;
+  --brand-400: #9d89fa;
+  --brand-500: #a78bfa;
+  --brand-600: #b29fff;
+  --brand-700: #b9a8ff;
+  --brand-800: #cebdff;
+  --brand-900: #ddd3ff;
+  --brand-950: #eee9ff;
+
+  --ink: #070c17;
+  --ink-text: #eef2fb;
+  --ink-lead: #9aaecb;
+
+  --button-primary: #6d5ce8;
+  --button-primary-hover: #5d4bd8;
+  --button-secondary: #1b283e;
+  --button-secondary-hover: #263650;
+
+  --success: #50d6ae;
+  --success-bg: #102c29;
+  --warning: #f5cb77;
+  --warning-bg: #2b251a;
+  --danger: #ff8ea4;
+  --danger-bg: #301c2a;
+
+  --background: var(--bg);
+  --foreground: var(--text);
+  --card: #101a2d;
+  --card-foreground: var(--text);
+  --popover: #142037;
+  --popover-foreground: var(--text);
+  --primary: var(--button-primary);
+  --primary-foreground: #ffffff;
+  --secondary: var(--button-secondary);
+  --secondary-foreground: var(--text-strong);
+  --muted: var(--bg-section);
+  --muted-foreground: var(--text-muted);
+  --accent: var(--bg-section);
+  --accent-foreground: var(--text-strong);
+  --destructive: var(--danger);
+  --border: var(--border-color);
+  --input: var(--line-strong);
+  --ring: var(--brand-700);
+  --sidebar: var(--bg-soft);
+  --sidebar-foreground: var(--text);
+  --sidebar-border: var(--border-color);
+
+  /* Distinct bright series on dark cards; no change to metric meaning. */
+  --chart-1: var(--brand-500);
+  --chart-2: #4fd7ef;
+  --chart-grid: var(--border-soft);
+  --chart-axis: var(--text-muted);
+
+  --shadow-1: 0 2px 8px rgb(0 0 0 / 0.12);
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 0.16);
+  --shadow-3: 0 24px 64px rgb(0 0 0 / 0.42);
+}
+
+/* Mono is for uppercase text: labels, badges, table headers. */
+@utility mono-label {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  font-synthesis: none;
+}
+
+/* Button labels: the same mono uppercase, at 500. */
+@utility mono-button {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  font-synthesis: none;
+}
+
+/* Violet eyebrow labels connect the shell to the content planner. */
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-label);
+  font-synthesis: none;
+  color: var(--brand-700);
+}
+
+/* Text links retain an underline so the affordance is not colour alone. */
+@utility text-link {
+  color: var(--text-strong);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: var(--line-strong);
+  transition: text-decoration-color 150ms ease-out;
+
+  &:hover {
+    text-decoration-color: var(--brand-500);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  /* The requested fixed dark theme is independent of the OS preference. */
+  html {
+    @apply h-full font-sans;
+    color-scheme: dark;
+    scrollbar-color: #435572 var(--bg-soft);
+    scrollbar-width: thin;
+  }
+
+  body {
+    @apply min-h-full bg-background text-foreground antialiased;
+    font-size: 14px;
+    line-height: 24px;
+  }
+
+  input,
+  select,
+  textarea {
+    accent-color: var(--brand-500);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-soft);
+    opacity: 1;
+  }
+
+  input:-webkit-autofill {
+    -webkit-text-fill-color: var(--text-strong);
+    box-shadow: 0 0 0 1000px var(--bg-soft) inset;
+    caret-color: var(--text-strong);
+  }
+
+  h1,
+  h2,
+  h3 {
+    color: var(--text-strong);
+  }
+
+  b,
+  strong {
+    font-weight: 600;
+  }
+
+  /* Geist Mono is loaded at 400 and 500 only; never let the browser fake another weight. */
+  .font-mono,
+  pre,
+  code {
+    font-synthesis: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--brand-700);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--brand-100);
+    color: var(--text-strong);
+  }
+}
+
+@layer utilities {
+  /* Numbers, URLs, queries and code: mono in their own case, tabular figures. */
+  .font-data {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-synthesis: none;
+  }
+}
+
+/* Component classes sit below utilities, so a utility on the same element wins. */
+@layer components {
+  .panel {
+    @apply rounded-xl border border-border bg-card text-card-foreground;
+    box-shadow: var(--shadow-1);
+  }
+
+  .panel-muted {
+    @apply rounded-xl border border-border bg-bg-soft;
+  }
+
+  .panel-elevated {
+    @apply rounded-xl border border-border bg-card;
+    box-shadow: var(--shadow-3);
+  }
+
+  .rank-top3 {
+    color: var(--success);
+    background: var(--success-bg);
+  }
+
+  .rank-top10 {
+    color: var(--warning);
+    background: var(--warning-bg);
+  }
+
+  .rank-top20 {
+    color: var(--text-strong);
+    background: var(--bg-section);
+  }
+
+  .rank-deep {
+    color: var(--text-muted);
+    background: var(--bg-section);
+  }
+
+  .text-atom-tiny {
+    font-size: 11px;
+    line-height: 16px;
+  }
+  .text-atom-caption {
+    font-size: 12px;
+    line-height: 20px;
+  }
+  .text-atom-body {
+    font-size: 14px;
+    line-height: 24px;
+  }
+  .text-atom-subheader {
+    font-size: 17px;
+    line-height: 28px;
+    letter-spacing: -0.015em;
+  }
+  .text-atom-title {
+    font-size: 20px;
+    line-height: 28px;
+    letter-spacing: -0.015em;
+  }
+  .text-atom-heading {
+    font-size: 27px;
+    line-height: 1.2;
+    letter-spacing: -0.02em;
+  }
+  .text-atom-display1 {
+    font-size: 32px;
+    line-height: 1.2;
+    letter-spacing: -0.025em;
+  }
+
+  .surface-inset {
+    @apply rounded-xl border border-border bg-bg-soft;
+  }
+
+  .workspace-heading {
+    background: radial-gradient(ellipse at top left, rgb(109 92 232 / 0.1), transparent 70%), var(--card);
+  }
+
+  .workspace-empty {
+    background: radial-gradient(ellipse at top, rgb(109 92 232 / 0.12), transparent 65%), var(--card);
+  }
+
+  .empty-illustration {
+    mask-image: radial-gradient(ellipse closest-side, #000 35%, transparent 100%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,9 @@
+# Local configuration, secrets and data of a running kit: never commit or share.
+.env
+private/
+backups/
+reports/
+deployment-info.json
+# Codex login state; only the config templates belong in the kit.
+codex/*/*
+!codex/*/config.toml

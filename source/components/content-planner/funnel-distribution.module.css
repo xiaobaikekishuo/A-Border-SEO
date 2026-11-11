@@ -1,0 +1,12 @@
+.distribution { margin: 0 0 22px; padding: 18px; border: 1px solid #2c3852; border-radius: 12px; min-width: 0; }
+.distribution legend { padding: 0 8px; font-size: 13px; color: #c9d7ee; }
+.settings { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.distribution label { display: flex; flex-direction: column; gap: 8px; min-width: 0; color: #b7c6df; font-size: 12px; }
+.distribution select, .distribution input { width: 100%; min-width: 0; border: 1px solid #34435d; border-radius: 8px; background: #090f1f; color: #e9effb; padding: 11px 12px; font: inherit; }
+.distribution select:focus-visible, .distribution input:focus-visible { outline: 2px solid #a78bfa; outline-offset: 2px; }
+.counts { margin-top: 18px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.counts small { color: #9b8bdb; }
+.summary { color: #cfbdf8; font-size: 12px; line-height: 1.7; margin: 14px 0 10px; }
+.hint { color: #8ca2c2; font-size: 12px; line-height: 1.8; margin: 8px 0 0; }
+.error { color: #f6a9b5; font-size: 12px; line-height: 1.8; }
+@media (max-width: 620px) { .settings, .counts { grid-template-columns: 1fr; }.distribution { padding: 14px; } }

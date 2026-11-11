@@ -1,0 +1,21 @@
+.git
+.gitignore
+README.md
+DEVELOPMENT.md
+PLAN.md
+node_modules
+npm-debug.log
+.next
+.env.local
+.env
+.DS_Store
+.vscode
+.idea
+coverage
+dist
+build
+*.log
+packages/mcp/dist
+
+# Include documentation for the outbound-host regression check.
+!README.md

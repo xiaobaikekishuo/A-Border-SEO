@@ -1,0 +1,352 @@
+import type { Crawl, IssueSeverity } from "@prisma/client";
+import { db } from "@/lib/db";
+import { getVisibleIssues, listVisibleIssues } from "@/lib/crawler/issue-filter";
+import { NOINDEX_PAGE } from "@/lib/crawler/page-stats";
+import { getNoindexWarning } from "@/lib/crawler/noindex-warning";
+import { INTERRUPTED_MESSAGE, staleCrawlWhere } from "@/lib/crawler/lifecycle";
+import { getDailyTraffic, getSitePeriodMetrics, getTopKeywords, getTopPages } from "@/lib/seo-metrics";
+import { getAllOpportunities } from "@/lib/seo-opportunities";
+import { gscDate } from "@/lib/google/gsc-date";
+import { readPlatformOverview } from "@/lib/geo/platform-overview";
+import { geoPlatform } from "@/lib/geo/platforms";
+import { ApiError, enumParam, intParam, periodParam } from "./params";
+
+/*
+ * The read endpoints of /api/v1. Each one takes the user the key belongs to
+ * and reads that user's data only; none of them writes anything.
+ */
+
+export type Site = { id: string; domain: string; gscProperty: string | null };
+
+const SEVERITIES: readonly IssueSeverity[] = ["CRITICAL", "WARNING", "INFO"];
+const DEVICES = ["MOBILE", "DESKTOP"] as const;
+
+/** The user's site, or 404: someone else's site reads exactly like a missing one. */
+export async function ownSite(userId: string, siteId: string): Promise<Site> {
+  const site = await db.site.findFirst({
+    where: { id: siteId, userId },
+    select: { id: true, domain: true, gscProperty: true },
+  });
+  if (!site) throw new ApiError(404, "Site not found");
+  return site;
+}
+
+type CrawlRow = Pick<Crawl, "id" | "status" | "startedAt" | "finishedAt" | "pagesFound" | "issuesFound" | "healthScore" | "error" | "maxPages">;
+const CRAWL_SELECT = {
+  id: true,
+  status: true,
+  startedAt: true,
+  finishedAt: true,
+  pagesFound: true,
+  issuesFound: true,
+  healthScore: true,
+  error: true,
+  maxPages: true,
+} as const;
+
+/**
+ * A crawl whose process is gone reads as FAILED, as the dashboard shows it
+ * once it has marked it. Decided here without writing anything.
+ */
+async function withStaleAsFailed(crawls: CrawlRow[]): Promise<CrawlRow[]> {
+  const active = crawls.filter((c) => c.status === "PENDING" || c.status === "RUNNING").map((c) => c.id);
+  if (active.length === 0) return crawls;
+  const stale = await db.crawl.findMany({ where: { id: { in: active }, ...staleCrawlWhere() }, select: { id: true } });
+  const ids = new Set(stale.map((c) => c.id));
+  return crawls.map((c) => (ids.has(c.id) ? { ...c, status: "FAILED", error: INTERRUPTED_MESSAGE } : c));
+}
+
+/** The key making the request, so a client can check its key without reading any data. */
+export async function keyInfo(keyId: string) {
+  const key = await db.accessKey.findUnique({ where: { id: keyId }, select: { name: true, prefix: true, createdAt: true } });
+  if (!key) throw new ApiError(401, "Invalid API key");
+  return { key };
+}
+
+export async function listSites(userId: string) {
+  const sites = await db.site.findMany({
+    where: { userId },
+    select: {
+      id: true,
+      domain: true,
+      gscProperty: true,
+      bingSite: true,
+      createdAt: true,
+      _count: { select: { crawls: true, vitals: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return {
+    sites: sites.map(({ _count, ...s }) => ({ ...s, crawls: _count.crawls, vitalsReports: _count.vitals })),
+  };
+}
+
+export async function siteOverview(site: Site) {
+  const [metrics, latestCrawl, latestVitals] = await Promise.all([
+    getSitePeriodMetrics(site.id, 28),
+    db.crawl.findFirst({ where: { siteId: site.id }, orderBy: { startedAt: "desc" }, select: CRAWL_SELECT }),
+    db.vitalsReport.findFirst({ where: { siteId: site.id }, orderBy: { date: "desc" } }),
+  ]);
+  return {
+    site,
+    metricsDays: 28,
+    metrics,
+    latestCrawl: latestCrawl ? (await withStaleAsFailed([latestCrawl]))[0] : null,
+    latestVitals: latestVitals && vitalsView(latestVitals),
+  };
+}
+
+export async function keywords(site: Site, params: URLSearchParams) {
+  const { period, startDate, endDate } = periodParam(params, 28);
+  const limit = intParam(params, "limit", 50, 1, 1000);
+  return { site, startDate, endDate, keywords: await getTopKeywords(site.id, period, limit) };
+}
+
+export async function pages(site: Site, params: URLSearchParams) {
+  const { period, startDate, endDate } = periodParam(params, 28);
+  const limit = intParam(params, "limit", 50, 1, 1000);
+  return { site, startDate, endDate, pages: await getTopPages(site.id, period, limit) };
+}
+
+export async function traffic(site: Site, params: URLSearchParams) {
+  const { period, startDate, endDate } = periodParam(params, 90);
+  return { site, startDate, endDate, days: await getDailyTraffic(site.id, period) };
+}
+
+export async function crawls(site: Site, params: URLSearchParams) {
+  const limit = intParam(params, "limit", 10, 1, 100);
+  const rows = await db.crawl.findMany({
+    where: { siteId: site.id },
+    orderBy: { startedAt: "desc" },
+    take: limit,
+    select: CRAWL_SELECT,
+  });
+  return { site, crawls: await withStaleAsFailed(rows) };
+}
+
+/**
+ * Issues of one crawl of the site; crawlId "latest" is the latest completed
+ * crawl. noindex pages have no issues and do not count toward the health
+ * score; `noindexPages` says how many the crawl kept out.
+ * `noindexWarning` is set when at least 80% of the fetched (2xx) pages are
+ * noindex, so a clean score is not read as a healthy site; null otherwise.
+ */
+export async function crawlIssues(site: Site, crawlId: string, params: URLSearchParams) {
+  const severity = enumParam(params, "severity", SEVERITIES);
+  const limit = intParam(params, "limit", 50, 1, 500);
+  const crawl = await db.crawl.findFirst({
+    where: crawlId === "latest" ? { siteId: site.id, status: "COMPLETED" } : { id: crawlId, siteId: site.id },
+    orderBy: { startedAt: "desc" },
+    select: CRAWL_SELECT,
+  });
+  if (!crawl) throw new ApiError(404, crawlId === "latest" ? "This site has no completed crawl yet" : "Crawl not found");
+  const [counts, issues, noindexPages, noindexWarning] = await Promise.all([
+    getVisibleIssues(db, crawl.id, 0),
+    listVisibleIssues(db, { crawlId: crawl.id, severity, limit }),
+    db.auditPage.count({ where: { crawlId: crawl.id, ...NOINDEX_PAGE } }),
+    getNoindexWarning(db, crawl.id),
+  ]);
+  return {
+    site,
+    crawl: (await withStaleAsFailed([crawl]))[0],
+    total: counts.total,
+    bySeverity: counts.bySeverity,
+    noindexPages,
+    noindexWarning,
+    ...(counts.auditReview ? { auditReview: counts.auditReview } : {}),
+    issues,
+  };
+}
+
+type VitalsRow = {
+  url: string;
+  date: Date;
+  device: string;
+  lcp: number | null;
+  cls: number | null;
+  inp: number | null;
+  fid: number | null;
+  ttfb: number | null;
+  perfScore: number | null;
+  speedIndex: number | null;
+};
+
+function vitalsView(v: VitalsRow) {
+  const { url, date, device, lcp, cls, inp, fid, ttfb, perfScore, speedIndex } = v;
+  return { url, date, device, lcp, cls, inp, fid, ttfb, perfScore, speedIndex };
+}
+
+export async function vitals(site: Site, params: URLSearchParams) {
+  const device = enumParam(params, "device", DEVICES);
+  const limit = intParam(params, "limit", 10, 1, 100);
+  const reports = await db.vitalsReport.findMany({
+    where: { siteId: site.id, ...(device && { device }) },
+    orderBy: { date: "desc" },
+    take: limit,
+  });
+  return { site, reports: reports.map(vitalsView) };
+}
+
+export async function opportunities(site: Site) {
+  return { site, ...(await getAllOpportunities(site.id)) };
+}
+
+/** The site's Bing Webmaster property, or 404 when none is connected. */
+async function bingProperty(site: Site): Promise<string> {
+  const row = await db.site.findUnique({ where: { id: site.id }, select: { bingSite: true } });
+  if (!row?.bingSite) throw new ApiError(404, "This site has no Bing Webmaster property connected");
+  return row.bingSite;
+}
+
+/** Bing rows are stored by day the way Search Console rows are (gscDate). */
+function dayRange({ startDate, endDate }: { startDate: string; endDate: string }) {
+  return { gte: gscDate(startDate), lte: gscDate(endDate) };
+}
+
+/**
+ * Bing's daily rows. Only clicks, impressions and crawledPages count that day;
+ * inIndex, inLinks and the status-code columns are what Bing knew that day,
+ * so they are read per day, never summed. null means Bing did not report it.
+ */
+export async function bingTraffic(site: Site, params: URLSearchParams) {
+  const bingSite = await bingProperty(site);
+  const { startDate, endDate } = periodParam(params, 90);
+  const rows = await db.bingDaily.findMany({
+    where: { siteId: site.id, date: dayRange({ startDate, endDate }) },
+    orderBy: { date: "asc" },
+    omit: { id: true, siteId: true },
+  });
+  const days = rows.map(({ date, ...counts }) => ({ date: date.toISOString().slice(0, 10), ...counts }));
+  return { site, bingSite, startDate, endDate, days };
+}
+
+type BingSearchRow = { key: string; clicks: number | null; impressions: number | null; position: number | null; weeks: number };
+
+/**
+ * Bing's weekly query or page rows whose week ends inside the period, summed
+ * per query or page. position is weighted by impressions. A total Bing never
+ * reported stays null. Sorted by clicks, then impressions.
+ */
+async function bingSearch(site: Site, params: URLSearchParams, kind: "query" | "page") {
+  const bingSite = await bingProperty(site);
+  const { startDate, endDate } = periodParam(params, 28);
+  const limit = intParam(params, "limit", 50, 1, 1000);
+  const rows = await db.bingSearchWeekly.findMany({
+    where: { siteId: site.id, kind, weekEnding: dayRange({ startDate, endDate }) },
+    select: { key: true, clicks: true, impressions: true, avgImpressionPosition: true },
+  });
+  const byKey = new Map<string, BingSearchRow & { weighted: number; weight: number }>();
+  for (const r of rows) {
+    const t = byKey.get(r.key) ?? { key: r.key, clicks: null, impressions: null, position: null, weeks: 0, weighted: 0, weight: 0 };
+    if (r.clicks !== null) t.clicks = (t.clicks ?? 0) + r.clicks;
+    if (r.impressions !== null) t.impressions = (t.impressions ?? 0) + r.impressions;
+    if (r.avgImpressionPosition !== null && r.impressions) {
+      t.weighted += r.avgImpressionPosition * r.impressions;
+      t.weight += r.impressions;
+    }
+    t.weeks++;
+    byKey.set(r.key, t);
+  }
+  const totals: BingSearchRow[] = [...byKey.values()]
+    .map(({ weighted, weight, ...t }) => ({ ...t, position: weight > 0 ? weighted / weight : null }))
+    .sort((a, b) => (b.clicks ?? -1) - (a.clicks ?? -1) || (b.impressions ?? -1) - (a.impressions ?? -1) || a.key.localeCompare(b.key))
+    .slice(0, limit);
+  return { site, bingSite, startDate, endDate, totals };
+}
+
+export async function bingKeywords(site: Site, params: URLSearchParams) {
+  const { totals, ...rest } = await bingSearch(site, params, "query");
+  return { ...rest, keywords: totals.map(({ key, ...t }) => ({ query: key, ...t })) };
+}
+
+export async function bingPages(site: Site, params: URLSearchParams) {
+  const { totals, ...rest } = await bingSearch(site, params, "page");
+  return { ...rest, pages: totals.map(({ key, ...t }) => ({ url: key, ...t })) };
+}
+/**
+ * The keywords the user saved for the site, newest first, each with its
+ * Search Console totals for the period, computed as get_keywords computes
+ * them. A saved keyword with no Search Console row in the period has null
+ * totals.
+ */
+export async function savedKeywords(site: Site, params: URLSearchParams) {
+  const { period, startDate, endDate } = periodParam(params, 28);
+  const saved = await db.savedKeyword.findMany({
+    where: { siteId: site.id },
+    orderBy: { createdAt: "desc" },
+    select: { query: true, notes: true, createdAt: true },
+  });
+  const rows = saved.length
+    ? await getTopKeywords(site.id, period, saved.length, saved.map((s) => s.query))
+    : [];
+  const byQuery = new Map(rows.map(({ query, ...totals }) => [query, totals]));
+  return {
+    site,
+    startDate,
+    endDate,
+    savedKeywords: saved.map((s) => ({
+      query: s.query,
+      notes: s.notes,
+      savedAt: s.createdAt,
+      ...(byQuery.get(s.query) ?? { clicks: null, impressions: null, position: null, ctr: null }),
+    })),
+  };
+}
+
+/**
+ * Every AI platform on the six GEO layers (access, page directives, index,
+ * the platform's AI report, answers from prompt tracking, traffic) and the
+ * latest tracking run. Reads what the app already holds; requests nothing.
+ */
+export async function aiVisibility(site: Site, userId: string) {
+  const [overview, lastRun, activePrompts] = await Promise.all([
+    readPlatformOverview(db, userId, site.id),
+    db.geoRun.findFirst({
+      where: { siteId: site.id },
+      orderBy: { startedAt: "desc" },
+      select: { status: true, startedAt: true, finishedAt: true, planned: true, done: true, failed: true, costUsd: true, errorCode: true },
+    }),
+    db.geoPrompt.count({ where: { siteId: site.id, active: true } }),
+  ]);
+  return {
+    site,
+    probe: overview.probe,
+    crawl: overview.crawl,
+    tracking: { activePrompts, lastRun },
+    platforms: overview.platforms.map((p) => {
+      const serving = p.access.tokens.filter((x) => x.role !== "TRAINING");
+      const v = p.answers.visibility;
+      return {
+        id: p.id,
+        name: geoPlatform(p.id)?.name ?? p.id,
+        access: {
+          state: p.access.state,
+          blockedInRobots: serving.filter((x) => x.robots === "BLOCKED").map((x) => x.token),
+          refusedLive: serving.filter((x) => x.live === "BLOCKED_FOR_BOT").map((x) => x.token),
+        },
+        eligibility: {
+          state: p.eligibility.state,
+          pages: p.eligibility.summary?.pages ?? 0,
+          ok: p.eligibility.summary?.ok ?? 0,
+          limited: p.eligibility.summary?.limited ?? 0,
+          excluded: p.eligibility.summary?.excluded ?? 0,
+          reasons: p.eligibility.summary?.reasons ?? {},
+        },
+        index: { state: p.index.state, kind: p.index.kind, pages: p.index.pages },
+        report: { state: p.report.state, kind: p.report.kind, total: p.report.total, start: p.report.start, end: p.report.end },
+        answers: {
+          state: p.answers.state,
+          source: p.answers.source,
+          tracked: p.answers.tracked,
+          answers: v?.answers ?? 0,
+          mentionRate: v?.mentionRate ?? null,
+          citationRate: v?.citationRate ?? null,
+          shareOfVoice: v?.shareOfVoice ?? null,
+          avgCitationRank: v?.avgCitationRank ?? null,
+          competitors: (v?.competitors ?? []).slice(0, 5),
+        },
+        traffic: { state: p.traffic.state, referrals: p.traffic.referrals, crawlerRequests: p.traffic.crawlerRequests },
+      };
+    }),
+  };
+}

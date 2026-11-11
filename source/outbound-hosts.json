@@ -1,0 +1,130 @@
+{
+  "$comment": "Every external host in the app's code (lib/, app/, packages/, components/ and root files). \"requests\" are the hosts the app contacts and must match the README section \"数据与外部连接\" (see DEVELOPMENT.md, Outbound connections). \"notRequested\" hosts only appear as links or plain strings, and only in the files listed. lib/outbound-hosts.test.ts fails on anything else.",
+  "requests": {
+    "api.manus.ai": "Optional Manus key check, user-confirmed keyword research and reading its status and results",
+    "private.manuscdn.com": "Signed workbook and Markdown report downloads for an existing Manus task",
+    "private-us-east-1.manuscdn.com": "Regional signed workbook and Markdown report downloads for an existing Manus task",
+    "auth.openai.com": "Optional local ChatGPT app OAuth, JWKS verification, token renewal and session revocation",
+    "api.openai.com": "Optional ChatGPT app model catalog and explicitly requested draft generation using the authorized plan",
+    "accounts.google.com": "Google sign-in: Auth.js OIDC discovery and the browser redirect (not a literal in our code)",
+    "oauth2.googleapis.com": "Google OAuth tokens (sign-in, refresh) and revoke on disconnect",
+    "www.googleapis.com": "Search Console and PageSpeed Insights APIs; also the OAuth scope names",
+    "searchconsole.googleapis.com": "Search Console URL Inspection (index status)",
+    "analyticsdata.googleapis.com": "Manually requested GA4 read-only AI session reports",
+    "ssl.bing.com": "Bing Webmaster Tools API, only with the user's own key",
+    "api.dataforseo.com": "DataForSEO API, only with the user's own key",
+    "suggestqueries.google.com": "Google autocomplete keyword suggestions",
+    "api.github.com": "Optional daily update check, only when UPDATE_CHECK_REPO names a repository"
+  },
+  "notRequested": {
+    "manus.im": {
+      "reason": "Private task page for a Manus research task, opened in the user's browser",
+      "files": ["lib/manus/client.ts"]
+    },
+    "open.manus.ai": {
+      "reason": "Official Manus authentication guide opened from Settings",
+      "files": ["components/settings/connections-section.tsx"]
+    },
+    "developers.openai.com": {
+      "reason": "Official crawler reference opened only by the user",
+      "files": [
+        "components/sites/ai-access-panel.tsx"
+      ]
+    },
+    "privacy.claude.com": {
+      "reason": "Official crawler reference opened only by the user",
+      "files": [
+        "components/sites/ai-access-panel.tsx"
+      ]
+    },
+    "docs.perplexity.ai": {
+      "reason": "Official crawler reference opened only by the user",
+      "files": [
+        "components/sites/ai-access-panel.tsx"
+      ]
+    },
+    "schema.org": {
+      "reason": "JSON-LD vocabulary identifier checked locally; no remote context is fetched",
+      "files": [
+        "lib/seo/structured-data.ts"
+      ]
+    },
+    "chatgpt.com": {
+      "reason": "ChatGPT usage settings opened by the user; no request from A-Border SEO",
+      "files": [
+        "components/ai-workbench/chatgpt-connection.tsx",
+        "components/ai-workbench/workbench.tsx",
+        "lib/ai-usage/report.ts"
+      ]
+    },
+    "github.com": {
+      "reason": "Release page link in the sidebar footer (only with UPDATE_CHECK_REPO), opened by the user",
+      "files": [
+        "lib/update-check.ts"
+      ]
+    },
+    "www.bing.com": {
+      "reason": "Help link in Settings > Connections",
+      "files": [
+        "components/settings/connections-section.tsx"
+      ]
+    },
+    "app.dataforseo.com": {
+      "reason": "Help link in Settings > Connections",
+      "files": [
+        "components/settings/connections-section.tsx"
+      ]
+    },
+    "console.cloud.google.com": {
+      "reason": "Help links in Settings > Connections and the GA4 setup guide",
+      "files": [
+        "components/settings/connections-section.tsx",
+        "lib/google/pagespeed-errors.ts",
+        "components/sites/action-buttons.tsx",
+        "components/sites/ga4-setup-guide.tsx"
+      ]
+    },
+    "www.w3.org": {
+      "reason": "SVG namespace",
+      "files": [
+        "components/brand/logo.tsx"
+      ]
+    },
+    "ssad.shop": {
+      "files": [
+        "lib/content-planner/data.ts"
+      ],
+      "reason": "Existing content planner example URLs, stored as references; no request is made by the seed function"
+    },
+    "knowledge.hubspot.com": {
+      "files": [
+        "components/content-planner/planner-ui.tsx"
+      ],
+      "reason": "Existing concept guide reference links, opened only by the user"
+    },
+    "blog.hubspot.com": {
+      "files": [
+        "components/content-planner/planner-ui.tsx"
+      ],
+      "reason": "Existing concept guide reference links, opened only by the user"
+    },
+    "dataforseo.com": {
+      "reason": "Provider pricing link opened by the user before paid research",
+      "files": [
+        "components/research/research-controls.tsx"
+      ]
+    },
+    "developers.google.com": {
+      "reason": "Official crawler reference opened only by the user",
+      "files": [
+        "components/sites/ai-access-panel.tsx"
+      ]
+    },
+    "analytics.google.com": {
+      "reason": "Google Analytics link in the GA4 setup guide, opened by the user",
+      "files": [
+        "components/sites/ga4-setup-guide.tsx"
+      ]
+    }
+  }
+}

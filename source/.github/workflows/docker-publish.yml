@@ -1,0 +1,215 @@
+name: Docker image
+
+# Every push and pull request builds the image on amd64 and arm64 and boots it
+# against a scratch database (migrations, web app, background worker). A
+# version tag (v1.2.3) also publishes it to GHCR as :1.2.3, :1.2 and :latest.
+on:
+  push:
+    branches: [main]
+    tags: ["v*.*.*"]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+  pull_request:
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Each platform builds natively on its own runner (no emulation), boots the
+  # image and only then pushes it by digest; "publish" joins the digests.
+  build:
+    name: Build and boot (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          load: true
+          tags: aborder-seo-ci:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+
+      # A green build is not yet a working image: missing runtime modules only
+      # show when the image runs. Apply the migrations, start the web app and the
+      # worker, and require each to work before anything is published.
+      - name: Boot test
+        run: |
+          set -euo pipefail
+          image=aborder-seo-ci:${{ github.sha }}
+          db=postgresql://aborder:ci-only@ci-db:5432/aborder
+          docker network create ci
+          docker run -d --name ci-db --network ci \
+            -e POSTGRES_USER=aborder -e POSTGRES_PASSWORD=ci-only -e POSTGRES_DB=aborder \
+            postgres:16-alpine
+          for i in $(seq 1 30); do
+            docker exec ci-db pg_isready -U aborder -d aborder >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker run --rm --network ci -e DATABASE_URL="$db" "$image" \
+            node node_modules/prisma/build/index.js migrate deploy
+          docker run -d --name ci-app --network ci -p 3000:3000 \
+            -e DATABASE_URL="$db" -e NEXTAUTH_SECRET=ci-only -e NEXTAUTH_URL=http://localhost:3000 \
+            "$image"
+          healthy=""
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/health; then healthy=1; break; fi
+            sleep 2
+          done
+          if [ -z "$healthy" ]; then
+            echo "::error::${{ matrix.arch }}: the app did not answer /api/health within 60 s"
+            docker logs ci-app
+            exit 1
+          fi
+          docker run -d --name ci-worker --network ci \
+            -e DATABASE_URL="$db" -e NEXTAUTH_SECRET=ci-only -e WORKER_MODE=worker \
+            "$image" node worker.cjs
+          rows() {
+            docker exec ci-db psql -U aborder -d aborder -tAc \
+              "SELECT count(*) FROM \"WorkerHeartbeat\" WHERE mode = 'worker'"
+          }
+          for i in $(seq 1 30); do
+            [ "$(rows)" = "1" ] && break
+            sleep 2
+          done
+          if [ "$(rows)" != "1" ]; then
+            echo "::error::${{ matrix.arch }}: the worker did not register within 60 s"
+            docker logs ci-worker
+            exit 1
+          fi
+          docker stop -t 30 ci-worker
+          code=$(docker inspect -f '{{.State.ExitCode}}' ci-worker)
+          if [ "$code" != "0" ] || [ "$(rows)" != "0" ]; then
+            echo "::error::${{ matrix.arch }}: the worker did not stop cleanly (exit $code)"
+            docker logs ci-worker
+            exit 1
+          fi
+          echo "boot test (${{ matrix.arch }}): OK"
+
+      - name: Log in to GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        if: env.PUBLISH == 'true'
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      - name: Push image by digest
+        id: push
+        if: env.PUBLISH == 'true'
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+
+      - name: Export digest
+        if: env.PUBLISH == 'true'
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.push.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: env.PUBLISH == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish multi-architecture image
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          flavor: |
+            latest=auto
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - name: Create and push the manifest
+        working-directory: ${{ runner.temp }}/digests
+        env:
+          METADATA_JSON: ${{ steps.meta.outputs.json }}
+        run: |
+          set -euo pipefail
+          digests=(*)
+          if [ "${#digests[@]}" -ne 2 ]; then
+            echo "::error::expected 2 digests, found: ${digests[*]}"
+            exit 1
+          fi
+          args=()
+          while IFS= read -r tag; do args+=(-t "$tag"); done < <(jq -r '.tags[]' <<< "$METADATA_JSON")
+          for d in "${digests[@]}"; do args+=("${REGISTRY}/${IMAGE_NAME}@sha256:${d}"); done
+          docker buildx imagetools create "${args[@]}"

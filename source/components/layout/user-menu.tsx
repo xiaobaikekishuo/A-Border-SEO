@@ -1,0 +1,108 @@
+"use client";
+
+import { useUiText, identityUiText, type UiTranslator } from "@/components/ui/ui-text";
+
+
+import { useTransition } from "react";
+import Link from "next/link";
+import { Menu } from "@base-ui/react/menu";
+import { ChevronsUpDown, Loader2, LogOut, Settings } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Avatar } from "@/components/account/avatar";
+import { signOutAction } from "@/app/(dashboard)/settings/actions";
+import type { AvailableUpdate } from "@/lib/update-check";
+
+const ITEM_CLASS =
+  "flex h-9 w-full cursor-default items-center gap-2.5 rounded-sm px-2.5 text-[14px] text-text-strong outline-none select-none data-highlighted:bg-bg-section";
+
+/**
+ * Sidebar footer: the signed-in user as a button that opens Settings and
+ * Sign out, and the app version under it, with a link to a newer release
+ * when the update check found one. Collapsed, only the avatar shows.
+ */
+export function UserMenu({
+  name,
+  email,
+  image,
+  version,
+  update,
+  collapsed = false,
+}: {
+  name?: string | null;
+  email?: string | null;
+  image?: string | null;
+  version: string;
+  update?: AvailableUpdate | null;
+  collapsed?: boolean;
+}) {
+  const ui = useUiText();
+  const label = name?.trim() || email || ui("Account");
+  const [signingOut, startSignOut] = useTransition();
+
+  return (
+    <div className={cn("flex flex-col gap-1.5", collapsed ? "items-center" : "px-0.5")}>
+      <Menu.Root>
+        <Menu.Trigger
+          aria-label={collapsed ? ui("{0}: account menu", { "0": label }) : undefined}
+          title={collapsed ? label : undefined}
+          className={cn(
+            "flex items-center rounded-md text-left transition-colors outline-none hover:bg-bg-section focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring data-popup-open:bg-bg-section",
+            collapsed ? "size-10 justify-center" : "h-11 w-full gap-2.5 px-2"
+          )}
+        >
+          <Avatar name={name} email={email} image={image} className={collapsed ? "size-7" : undefined} />
+          {!collapsed && (
+            <>
+              <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-text-strong" title={label}>
+                {label}
+              </span>
+              <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            </>
+          )}
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner side="top" align="start" sideOffset={6} className="isolate z-50 outline-none">
+            <Menu.Popup className="min-w-[208px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-[var(--shadow-3)] outline-none">
+              {email && (
+                <p className="truncate px-2.5 pt-1.5 pb-2 text-[12px] leading-4 text-muted-foreground" title={email}>
+                  {email}
+                </p>
+              )}
+              <Menu.LinkItem render={<Link href="/settings" />} closeOnClick className={ITEM_CLASS}>
+                <Settings className="size-4 text-muted-foreground" aria-hidden />
+                {ui("Settings")}</Menu.LinkItem>
+              <Menu.Item
+                className={ITEM_CLASS}
+                disabled={signingOut}
+                closeOnClick={false}
+                onClick={() => startSignOut(() => signOutAction())}
+              >
+                {signingOut ? (
+                  <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden />
+                ) : (
+                  <LogOut className="size-4 text-muted-foreground" aria-hidden />
+                )}
+                {ui("Sign out")}</Menu.Item>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+      <div className={cn("flex flex-wrap items-baseline gap-x-2", !collapsed && "px-2")}>
+        <span className="font-data text-[11px] leading-4 text-muted-foreground" title={ui("A-Border SEO version")}>
+          v{version}
+        </span>
+        {update && !collapsed && (
+          <a
+            href={update.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] leading-4 font-medium text-text-strong underline underline-offset-2 hover:text-brand-700"
+          >
+            {ui("Update available: v{0}", { "0": update.version })}
+            <span className="sr-only">{ui(" (opens in a new tab)")}</span>
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,9 @@
+.presets { display:grid; gap:8px; min-width:0; }
+.heading { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 12px; color:var(--muted-foreground); font-size:12px; font-weight:500; line-height:1.5; }
+.heading small { font-size:11px; font-weight:400; }
+.buttons { display:flex; flex-wrap:wrap; gap:8px; }
+.buttons button { padding:7px 11px; border:1px solid #51436e; border-radius:9px; background:rgba(136,110,232,.08); color:#c2b5f4; font-size:12px; font-weight:500; line-height:1.5; text-align:left; cursor:pointer; overflow-wrap:anywhere; transition:background .15s,border-color .15s; }
+.buttons button:hover:not(:disabled) { background:rgba(136,110,232,.18); border-color:#9b86dc; }
+.buttons button:focus-visible { outline:2px solid #ab96f7; outline-offset:3px; }
+.buttons button:disabled { opacity:.45; cursor:not-allowed; }
+@media(max-width:600px) { .buttons { gap:7px; } .buttons button { padding:8px 10px; } }

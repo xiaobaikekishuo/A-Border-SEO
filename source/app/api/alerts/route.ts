@@ -1,0 +1,69 @@
+import { auth } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { ensureDefaultAlerts, evaluateAlertsForUser } from "@/lib/alerts/evaluate";
+import { dispatchJob } from "@/lib/jobs/dispatch";
+import { ALERT_EMAIL_JOB, ALERT_WEBHOOK_JOB } from "@/lib/jobs/handlers";
+import { queueAlertDeliveries } from "@/lib/webhooks/queue-alerts";
+
+export async function GET() {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const alerts = await db.alert.findMany({
+      where: { userId: session.user.id },
+      include: { site: { select: { domain: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return Response.json(alerts);
+  } catch (error) {
+    console.error(error);
+    return Response.json({ error: "Failed" }, { status: 500 });
+  }
+}
+
+export async function POST(req: Request) {
+  try {
+    const session = await auth();
+    if (!session?.user?.id) {
+      return Response.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const body = (await req.json()) as {
+      action?: "evaluate" | "ensure";
+      siteId?: string;
+    };
+
+    if (body.action === "ensure" && body.siteId) {
+      const site = await db.site.findUnique({
+        where: { id: body.siteId },
+        select: { userId: true },
+      });
+      if (!site || site.userId !== session.user.id) {
+        return Response.json({ error: "Not found" }, { status: 404 });
+      }
+      await ensureDefaultAlerts(session.user.id, body.siteId);
+      return Response.json({ ok: true });
+    }
+
+    const fires = await evaluateAlertsForUser(session.user.id);
+    // Fired alerts go to the user's webhook and email too, as after a scheduled evaluation.
+    let webhookDeliveries = 0;
+    let emailDeliveries = 0;
+    try {
+      const jobs = await queueAlertDeliveries(db, session.user.id, fires, { source: "manual" });
+      for (const job of jobs) dispatchJob(db, job);
+      webhookDeliveries = jobs.filter((j) => j.type === ALERT_WEBHOOK_JOB).length;
+      emailDeliveries = jobs.filter((j) => j.type === ALERT_EMAIL_JOB).length;
+    } catch (err) {
+      console.error("Queueing alert deliveries failed:", err);
+    }
+    return Response.json({ fires, webhookDeliveries, emailDeliveries });
+  } catch (error) {
+    console.error(error);
+    return Response.json({ error: "Failed" }, { status: 500 });
+  }
+}

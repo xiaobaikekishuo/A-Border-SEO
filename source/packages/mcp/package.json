@@ -1,0 +1,32 @@
+{
+  "name": "@a-border/seo-mcp",
+  "version": "1.1.2",
+  "description": "Read-only MCP server for A-Border SEO: your Search Console data, crawl issues, Core Web Vitals and SEO opportunities for AI agents, through your own instance's API.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "seo",
+    "google-search-console",
+    "a-border-seo"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "aborder-seo-mcp": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "node build.mjs",
+    "prepack": "node build.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "private": true
+}

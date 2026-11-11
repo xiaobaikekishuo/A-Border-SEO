@@ -1,0 +1,192 @@
+"use client";
+
+import { useUiText, identityUiText, type UiTranslator } from "@/components/ui/ui-text";
+
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import type { Dialog as DialogPrimitive } from "@base-ui/react/dialog";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+interface GSCProperty {
+  siteUrl: string;
+  permissionLevel: string;
+}
+
+export function AddSiteModal({
+  triggerLabel = "Add site",
+  handle,
+}: {
+  triggerLabel?: string;
+  /** Opened from elsewhere (the workspace switcher): no button of its own. */
+  handle?: DialogPrimitive.Handle<unknown>;
+}) {
+  const ui = useUiText();
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+  const [properties, setProperties] = useState<GSCProperty[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedProperty, setSelectedProperty] = useState<string>("");
+  const [adding, setAdding] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  async function handleOpenChange(newOpen: boolean) {
+    setOpen(newOpen);
+    if (newOpen) {
+      setSuccess(false);
+      setError("");
+      if (properties.length === 0) {
+        await loadGSCProperties();
+      }
+    }
+  }
+
+  async function loadGSCProperties() {
+    setLoading(true);
+    setError("");
+
+    try {
+      const response = await fetch("/api/gsc/properties");
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || ui("Failed to load GSC properties"));
+      }
+
+      const data = (await response.json()) as GSCProperty[];
+      setProperties(data || []);
+
+      if (!data?.length) {
+        setError(
+          ui("No GSC properties found. Verify this Google account has Search Console access.")
+        );
+      }
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : ui("Failed to load GSC properties")
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleAddSite() {
+    if (!selectedProperty) {
+      setError(ui("Select a property first"));
+      return;
+    }
+
+    setAdding(true);
+    setError("");
+
+    try {
+      // The server derives the stored domain from the property.
+      const response = await fetch("/api/sites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gscProperty: selectedProperty }),
+      });
+
+      const body = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(body.error || ui("Failed to add site"));
+      }
+
+      setSuccess(true);
+      setSelectedProperty("");
+      router.refresh();
+
+      setTimeout(() => {
+        setOpen(false);
+        if (body.id) {
+          router.push(`/sites/${body.id}`);
+        }
+      }, 800);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : ui("Failed to add site"));
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange} handle={handle}>
+      {!handle && <DialogTrigger render={<Button />}>{ui(triggerLabel)}</DialogTrigger>}
+
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{ui("Connect Search Console")}</DialogTitle>
+          <DialogDescription>
+            {ui("Pick a property you manage. We only request read-only GSC access.")}</DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {error && (
+            <div className="rounded-lg border border-danger/30 bg-danger-bg px-3 py-2 text-sm text-danger">
+              {error}
+            </div>
+          )}
+
+          {success && (
+            <div className="rounded-lg border border-success/30 bg-success-bg px-3 py-2 text-sm text-success">
+              {ui("Site connected. Opening workspace…")}</div>
+          )}
+
+          {loading ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {ui("Loading properties from Google…")}</div>
+          ) : properties.length > 0 ? (
+            <Select
+              value={selectedProperty}
+              onValueChange={(value) => value !== null && setSelectedProperty(value)}
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue placeholder={ui("Select a GSC property…")} />
+              </SelectTrigger>
+              <SelectContent>
+                {properties.map((prop) => (
+                  <SelectItem key={prop.siteUrl} value={prop.siteUrl}>
+                    {prop.siteUrl}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
+
+          <div className="flex flex-wrap justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setOpen(false)}
+              disabled={adding}
+            >
+              {ui("Cancel")}</Button>
+            <Button
+              type="button"
+              onClick={handleAddSite}
+              disabled={!selectedProperty || loading || adding}
+            >
+              {adding ? ui("Connecting…") : ui("Connect site")}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
