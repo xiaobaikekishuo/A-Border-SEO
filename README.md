@@ -4,6 +4,24 @@
 
 本仓库保存 2026-11-11 本地部署的源码快照，应用版本为 `1.1.2`，包含后续的 ChatGPT 连接修复、Manus 关键词研究与结果预览。用于私有备份、继续开发和在新环境部署。
 
+## 图片演示与操作案例
+
+**[查看完整图文教程](docs/DEMO.zh-CN.md)** · [Windows 安装与启动](windows/README.md)
+
+通过一个虚构的发票管理软件站点，演示「查看搜索表现 → 筛选关键词 → 检查页面问题 → 规划内容 → 审阅草稿 → 观察 GEO 数据」的完整流程。
+
+> 以下为软件真实界面截图，使用隔离环境的模拟数据。图片中的流量、排名、研究结果和文章仅用于教学，不是真实客户数据或效果证明。制作演示未执行付费 API 调用。
+
+![站点概览演示：搜索表现、趋势图和站点检查](docs/images/01-overview.png)
+
+![内容规划演示：主题支柱、选题数量与内容进度](docs/images/04-content-planner.png)
+
+| 想了解什么 | 图文入口 |
+|---|---|
+| 同步数据、筛选关键词、阅读审计问题 | [使用教程第 1 至 3 步](docs/DEMO.zh-CN.md) |
+| Pillar / Cluster 与 TOFU / MOFU / BOFU | [内容规划案例](docs/DEMO.zh-CN.md#content-planning) |
+| 草稿审阅、Manus 候选词筛选、GEO 数据 | [使用教程第 5 至 7 步](docs/DEMO.zh-CN.md) |
+
 ## 包含的功能
 
 - Google Search Console 数据同步、站点抓取、SEO 审计和页面性能检查。
@@ -21,6 +39,7 @@
 |---|---|
 | `source/` | Next.js 应用、后台 worker、数据库迁移、MCP、本机 worker 和测试 |
 | `windows/` | Windows 启动脚本、Docker Compose、本机配置模板和使用说明 |
+| `docs/` | 图文演示、使用案例及界面截图 |
 | `升级说明.md` | 升级及数据迁移说明 |
 | `LICENSE` | MIT 许可证，保留 CrawlSEO 与 A-Border 的版权声明 |
 
