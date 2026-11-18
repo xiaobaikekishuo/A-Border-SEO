@@ -7,6 +7,7 @@ import { isSignInAllowed } from "./registration";
 import { storeSignInTokens } from "./google/token-store";
 import { syncGoogleProfile } from "./google/profile";
 import { googleFetch } from "./google/google-fetch";
+import { managedSessionAdapter } from "./desktop/managed-session";
 
 // Skipped during `next build` so the Docker image can be built without real
 // credentials.  NEXT_PHASE is set by Next.js; SKIP_ENV_VALIDATION is a manual
@@ -14,17 +15,19 @@ import { googleFetch } from "./google/google-fetch";
 const isBuild =
   process.env.NEXT_PHASE === "phase-production-build" ||
   process.env.SKIP_ENV_VALIDATION === "1";
-if (!isBuild && (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET)) {
+const hasGoogle = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+if (!isBuild && process.env.ABORDER_HOSTED !== "1" && process.env.ABORDER_MANAGED !== "1" && !hasGoogle) {
   throw new Error("Missing Google OAuth credentials");
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: PrismaAdapter(db),
+  adapter: managedSessionAdapter(PrismaAdapter(db), db),
   providers: [
-    Google({
+    ...(hasGoogle || isBuild ? [Google({
       [customFetch]: googleFetch,
       clientId: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+      checks: ["pkce", "state"],
       authorization: {
         params: {
           scope: "openid email profile https://www.googleapis.com/auth/webmasters.readonly",
@@ -32,10 +35,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           prompt: "consent",
         },
       },
-    }),
+    })] : []),
   ],
   callbacks: {
     signIn({ account }) {
+      if (process.env.ABORDER_HOSTED === "1") return false;
       return isSignInAllowed(account);
     },
     async session({ session, user }) {
@@ -73,4 +77,5 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     strategy: "database",
   },
   secret: process.env.NEXTAUTH_SECRET,
+  ...(process.env.ABORDER_HOSTED === "1" ? { cookies: { sessionToken: { name: "__Secure-authjs.session-token", options: { httpOnly: true, sameSite: "lax" as const, path: "/", secure: true } } } } : {}),
 });

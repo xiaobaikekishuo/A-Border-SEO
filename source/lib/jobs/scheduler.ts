@@ -4,7 +4,12 @@ import { DAY, scheduleConfig, type ScheduleConfig } from "./config";
 import { BING_SYNC_JOB, CRAWL_JOB, GEO_VISIBILITY_JOB, GSC_SYNC_JOB, jobTypes, VITALS_JOB } from "./handlers";
 import { DEFAULT_CRAWL_PAGES } from "./policy";
 import { enqueueJob } from "./queue";
+import { desktopMaintenanceActive } from "@/lib/desktop/maintenance";
+import { managedAllows, managedAllowsJob, managedDecision } from "@/lib/managed/policy";
+import { managedUserScope } from "@/lib/managed/identity";
 import { requestCrawl } from "./site-jobs";
+import { hostedMode } from "@/lib/hosted/access";
+import { hostedJobAllows } from "./hosted-policy";
 
 /*
  * Queues the regular work per site: GSC and Bing syncs daily, a crawl and a
@@ -242,9 +247,12 @@ async function takePass(db: Db, now: Date, force: boolean): Promise<boolean> {
  */
 async function deleteOldJobs(db: Db, now: Date, retentionMs: number): Promise<number> {
   const cutoff = new Date(now.getTime() - retentionMs).toISOString();
+  const scope = await managedUserScope(db);
+  if (scope.managed && !scope.userId) return 0;
   return db.$executeRaw`
     DELETE FROM "Job" AS j
     WHERE j."status" IN ('SUCCEEDED', 'FAILED')
+      AND (${!scope.managed}::boolean OR j."siteId" IN (SELECT "id" FROM "Site" WHERE "userId" = ${scope.userId ?? ""}))
       AND j."finishedAt" < (${cutoff}::timestamptz AT TIME ZONE 'UTC')
       AND EXISTS (
         SELECT 1 FROM "Job" AS n
@@ -303,14 +311,20 @@ export async function runScheduler(
 ): Promise<SchedulerResult> {
   const now = opts.now ?? new Date();
   const config = opts.config ?? scheduleConfig();
-  const allowed = new Set(opts.types ?? jobTypes());
+  const decision = managedDecision();
+  const allowed = new Set((opts.types ?? jobTypes()).filter((type) => managedAllowsJob(type, decision)));
   const queued: Record<string, number> = {};
+  if (desktopMaintenanceActive() || !decision.allowed || !decision.features.jobs) return { ran: false, queued, deleted: 0 };
+  const scope = await managedUserScope(db);
+  if (scope.managed && !scope.userId) return { ran: false, queued, deleted: 0 };
   if (!(await takePass(db, now, opts.force ?? false))) return { ran: false, queued, deleted: 0 };
 
   const deleted = await deleteOldJobs(db, now, config.retentionMs);
   // Tasks run after the built-in work, so a slow one never holds it up.
   if (config.enabled) await scheduleSites(db, config, allowed, now, queued);
-  await runTasks(db, now);
+  // Custom callbacks receive the full database and have no owner contract.
+  // Keep them on unmanaged deployments until they support scoped execution.
+  if (!scope.managed && !hostedMode() && managedAllows("jobs")) await runTasks(db, now);
   return { ran: true, queued, deleted };
 }
 
@@ -321,7 +335,10 @@ async function scheduleSites(
   now: Date,
   queued: Record<string, number>
 ): Promise<void> {
+  const scope = await managedUserScope(db);
+  if (scope.managed && !scope.userId) return;
   const all: Site[] = await db.site.findMany({
+    ...(scope.managed && { where: { userId: scope.userId! } }),
     select: { id: true, userId: true, createdAt: true, gscProperty: true, bingSite: true },
     orderBy: { createdAt: "asc" },
   });
@@ -359,6 +376,7 @@ async function scheduleSites(
     const due = await dueSites(db, schedule, sites, { now, firstSeenAt, bingKeyUsers, dataForSeoUsers, userIntervals, geoTracking });
     for (const site of due) {
       try {
+        if (!await hostedJobAllows(db, { siteId: site.id, type: schedule.type })) continue;
         const created = await queueScheduled(db, schedule.type, site);
         if (created) queued[schedule.type] = (queued[schedule.type] ?? 0) + 1;
       } catch (err) {

@@ -31,6 +31,15 @@ function workspace(domain = "ssad.shop", pillars: Pillar[] = []): PlannerData {
 }
 
 describe("content planner data presentation", () => {
+  it("shows reviewed keywords, an existing-pillar selector and a separate preview step", () => {
+    const html = renderToStaticMarkup(<ContentPlanner siteId="s1" domain="ssad.shop" initialData={workspace("ssad.shop", [pillar()])}
+      research={{ reference: { jobId: "aw_task", indexes: [2] }, ideas: [{ keyword: "地区切换准备", intent: "INFORMATIONAL", funnel: "TOFU", cluster: "地区指南", angle: "切换前核对" }] }} />);
+    for (const label of ["地区切换准备", "已有总览主题", "预览选题设置", 'value="p1"']) expect(html).toContain(label);
+    expect(html).not.toContain('role="dialog"');
+    const invalid = renderToStaticMarkup(<ContentPlanner siteId="s1" domain="ssad.shop" initialData={workspace()} research={null} />);
+    expect(invalid).toContain("这些关键词无法读取");
+    expect(invalid).not.toContain("预览选题设置");
+  });
   it("skips normalized duplicate keywords unless brief updates are explicitly selected", () => {
     const topics = [{ keyword: " Ａｐｐｌｅ　ＩＤ " }, { keyword: "新主题" }];
     const existing = [{ keyword: "apple  id" }];

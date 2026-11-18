@@ -1,0 +1,17 @@
+[Unit]
+Description=Consistent A-Border SEO PostgreSQL and configuration backup
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/node /opt/aborder-server/current/server/deploy/manage.mjs backup --run
+UMask=0077
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/aborder-server /run/lock
+MemoryMax=512M

@@ -11,6 +11,6 @@ export const db =
         : ["error"],
   });
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = db;
-}
+// Production route bundles can load this module separately. Share one pool per
+// process there too, rather than opening another pool for each bundle.
+globalForPrisma.prisma = db;

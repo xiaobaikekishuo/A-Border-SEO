@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A-Border SEO 管理后台</title>
+  <link rel="stylesheet" href="/assets/admin.css">
+  <script type="module" src="/assets/admin.js"></script>
+</head>
+<body>
+  <section class="login-shell" id="login-view" hidden>
+    <div class="login-card">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span>A-Border SEO</span>
+      </div>
+      <h1>管理员登录</h1>
+      <form id="login-form" class="form-grid">
+        <label>管理员账号<input name="username" autocomplete="username" required></label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required></label>
+        <p class="form-error" id="login-error" role="alert" hidden></p>
+        <button class="button primary" type="submit">登录管理后台</button>
+      </form>
+    </div>
+  </section>
+
+  <div class="shell" id="console-view" hidden>
+    <aside class="sidebar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">A</span>
+        <span>A-Border SEO</span>
+      </div>
+      <nav aria-label="管理导航">
+        <button type="button" data-page="overview"><span class="nav-icon" aria-hidden="true">▦</span>总览</button>
+        <button type="button" data-page="accounts"><span class="nav-icon" aria-hidden="true">♙</span>账号授权</button>
+        <button type="button" data-page="devices"><span class="nav-icon" aria-hidden="true">▣</span>设备管理</button>
+        <button type="button" data-page="policies"><span class="nav-icon" aria-hidden="true">≋</span>维护与策略</button>
+        <button type="button" data-page="releases"><span class="nav-icon" aria-hidden="true">↑</span>版本发布</button>
+        <button type="button" data-page="audit"><span class="nav-icon" aria-hidden="true">≡</span>操作记录</button>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="quiet" id="admin-name"></span>
+        <button class="button subtle" id="logout" type="button">退出登录</button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="page-header">
+        <div><h1 id="page-title" tabindex="-1"></h1><p class="quiet" id="page-description"></p></div>
+        <div class="toolbar">
+          <label id="product-label">产品
+            <select id="product" aria-label="当前产品"></select>
+          </label>
+          <button class="button" id="refresh" type="button">刷新</button>
+        </div>
+      </header>
+      <div id="notification" class="notification" role="status" hidden></div>
+      <section id="page-content" aria-labelledby="page-title"></section>
+    </main>
+  </div>
+
+  <main class="load-screen" id="load-view">正在连接管理服务…</main>
+
+  <dialog id="editor" aria-labelledby="editor-title">
+    <div class="dialog-title">
+      <h2 id="editor-title"></h2>
+      <button id="editor-close" class="button subtle" type="button" aria-label="关闭">×</button>
+    </div>
+    <form id="editor-form" class="form-grid">
+      <div class="form-grid" id="editor-fields"></div>
+      <p class="form-error" id="editor-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button class="button" type="button" id="editor-cancel">取消</button>
+        <button class="button primary" type="submit" id="editor-submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

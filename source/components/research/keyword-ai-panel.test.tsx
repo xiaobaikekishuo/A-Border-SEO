@@ -28,7 +28,12 @@ describe("keyword suggestion generation boundaries", () => {
     expect(canGenerateKeywords(input, execution, state)).toBe(true);
     for (const key of ["active", "busy", "loading", "uncertain"] as const) expect(canGenerateKeywords(input, execution, { ...state, [key]: true })).toBe(false);
     expect(canGenerateKeywords(input, execution, { ...state, online: false })).toBe(false);
-    expect(canGenerateKeywords(input, { ...execution, provider: "CODEX_LOCAL" }, state)).toBe(false);
+    const native = { provider: "CODEX_LOCAL" as const, ready: true };
+    expect(canGenerateKeywords(input, native, state)).toBe(true);
+    expect(canGenerateKeywords(input, { ...native, ready: false }, state)).toBe(false);
+    const payload = keywordTaskPayload(input, native);
+    expect(payload.provider).toBe("CODEX_LOCAL");
+    for (const field of ["profileId", "model", "planOnlyConfirmed"]) expect(payload).not.toHaveProperty(field);
     expect(canGenerateKeywords(input, { ...execution, ready: false }, state)).toBe(false);
     expect(canGenerateKeywords(input, { ...execution, planOnlyConfirmed: false }, state)).toBe(false);
     expect(canGenerateKeywords(input, { ...execution, profileId: undefined }, state)).toBe(false);
@@ -68,6 +73,9 @@ describe("keyword suggestion review UI", () => {
     for (const text of ["搜索量 / 难度 / CPC", "未知", "不是实测需求或排名预测", "建议理由（AI 判断）", "保存关键词", "全部漏斗阶段", "账号地区", "请验证读者需求"]) expect(html).toContain(text);
     expect(html).toContain('data-account-only="true"');
     expect(html).toContain('data-return="keyword-research"');
+    expect(html).toContain("将 更换 Apple ID 地区前检查什么 选入规划");
+    expect(html).toContain("已选入规划：0 个词");
+    expect(html).not.toContain("researchJob=");
     expect(html).not.toContain("$0.00");
     expect(html).not.toContain("0 搜/月");
     expect(fetch).not.toHaveBeenCalled();

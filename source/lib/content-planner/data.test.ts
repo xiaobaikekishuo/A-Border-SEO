@@ -4,6 +4,7 @@ import { createTestDb, type TestDb } from "@/lib/testing/pglite";
 import { expireContentJobs, getContentWorkspace, LEASE_MS, runContentAction } from "./data";
 import { runWorkerAction } from "./worker";
 import { examplePlan } from "./test-fixtures";
+import { parseKeywordSelection, reviewedKeywords } from "./keyword-selection";
 
 let testDb: TestDb;
 let db: PrismaClient;
@@ -38,6 +39,41 @@ async function finish(now = new Date()) {
 }
 
 describe("content ownership and imports", () => {
+  it("previews owned research without creating a task and leases only the selected keywords after explicit generation", async () => {
+    const keywordIdeas = ["Cup sizing guide", "Unused keyword", "Cup comparison"].map(keyword => ({
+      keyword, intent: "INFORMATIONAL", funnel: "TOFU", cluster: "Cup guides", angle: "Answer a reader question", rationale: "Private reasoning excluded",
+    }));
+    const job = { id: "aw_plan_research", siteId, kind: "KEYWORD_RESEARCH", status: "SUCCEEDED" as const, title: "Research", request: {}, context: {}, result: { keywordIdeas } };
+    await db.aiWorkbenchJob.createMany({ data: [job, { ...job, id: "aw_plan_other", siteId: "other-site" },
+      { ...job, id: "aw_plan_failed", status: "FAILED" }, { ...job, id: "aw_plan_kind", kind: "WRITE_ARTICLE" }] });
+    const reference = { jobId: job.id, indexes: [2, 0] };
+    expect(parseKeywordSelection(job.id, "2,0")).toEqual(reference);
+    for (const bad of ["", "2,x", "25", "0,0"]) expect(parseKeywordSelection(job.id, bad)).toBeNull();
+    const preview = await reviewedKeywords(db, siteId, reference);
+    expect(preview?.ideas.map(idea => idea.keyword)).toEqual(["Cup comparison", "Cup sizing guide"]);
+    const action = { action: "startPlan", pillarId, topicCount: 3, keywordSelection: reference };
+    for (const invalid of [{ ...reference, indexes: [3] }, ...["aw_plan_other", "aw_plan_failed", "aw_plan_kind"].map(jobId => ({ ...reference, jobId }))]) {
+      expect(await reviewedKeywords(db, siteId, invalid)).toBeNull();
+      await expect(runContentAction(db, userId, siteId, { ...action, keywordSelection: invalid })).rejects.toMatchObject({ status: 409 });
+    }
+    expect(await db.contentPlanJob.count()).toBe(0);
+    const longIdeas = Array.from({ length: 24 }, (_, index) => ({ ...keywordIdeas[0],
+      keyword: `selected-${index}` + '"'.repeat(220), angle: '"'.repeat(500), cluster: '"'.repeat(200) }));
+    const large = await db.aiWorkbenchJob.create({ data: { ...job, id: "aw_very_long_research", result: { keywordIdeas: longIdeas } } });
+    await expect(runContentAction(db, userId, siteId, { ...action, keywordSelection: { jobId: large.id, indexes: longIdeas.map((_, index) => index) } }))
+      .rejects.toMatchObject({ status: 422, message: expect.stringContaining("select fewer research keywords") });
+    expect(await db.contentPlanJob.count()).toBe(0);
+    await runContentAction(db, userId, siteId, action);
+    const leased = await claim();
+    expect((await getContentWorkspace(db, userId, siteId)).jobs.find(job => job.id === leased.jobId)?.keywordSelection).toEqual(reference);
+    expect(leased.prompt).toContain("Cup comparison");
+    expect(leased.prompt).toContain("Cup sizing guide");
+    expect(leased.prompt).not.toContain("Unused keyword");
+    expect(leased.prompt).not.toContain("Private reasoning excluded");
+    expect(await db.contentCluster.count()).toBe(0);
+    expect((await db.contentPillar.findUniqueOrThrow({ where: { id: pillarId } })).keyword).toBe("cup");
+  });
+
   it("isolates workspaces and prevents foreign pillar, cluster and job mutations", async () => {
     await expect(getContentWorkspace(db, "other-owner", siteId)).rejects.toMatchObject({ status: 404 });
     await expect(getContentWorkspace(db, "", siteId)).rejects.toMatchObject({ status: 401 });

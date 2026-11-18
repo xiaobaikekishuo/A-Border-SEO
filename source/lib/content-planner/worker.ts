@@ -10,8 +10,18 @@ import { expireWorkbenchJobs } from "@/lib/ai-workbench/data";
 import { claimWorkbenchJob, runWorkbenchLease } from "@/lib/ai-workbench/worker";
 import { storedUsage } from "@/lib/ai-usage/schema";
 import { storedFunnelCounts, matchesFunnelCounts } from "./funnel";
+import { desktopMaintenanceActive } from "@/lib/desktop/maintenance";
+import { managedAllows, managedDecision } from "@/lib/managed/policy";
+import { managedUserScope } from "@/lib/managed/identity";
+import { managedSiteAllows } from "@/lib/managed/worker-owner";
+import { hostedLeaseScope, hostedClaimScope } from "@/lib/hosted/worker";
+import { hostedContext } from "@/lib/hosted/context";
+import { savedResearchSchema } from "./keyword-selection";
+import { fitPlanReferences, PLAN_TOO_LARGE } from "./claim-size";
 
 async function workerSeen(db: PlannerDb, workerId: string, now: Date) {
+  const context = hostedContext.getStore();
+  if (context) workerId = `hosted:${context.deviceId}`;
   await db.contentWorkerState.upsert({ where: { id: workerId }, create: { id: workerId, lastSeenAt: now }, update: { lastSeenAt: now } });
 }
 async function claimContext(db: PlannerDb, job: { siteId: string; pillarId: string; topicCount: number; request?: unknown }) {
@@ -29,18 +39,37 @@ async function claimContext(db: PlannerDb, job: { siteId: string; pillarId: stri
   const searchEvidence = window ? [...aggregateUrlMetrics(searchRows, window.period)]
     .sort((a, b) => b[1].impressions - a[1].impressions).slice(0, 50)
     .map(([url, m]) => ({ url, clicks: m.clicks, impressions: m.impressions, position: m.position })) : [];
-  const allowedInternalLinks = [...new Set([...knownPages.map((page) => page.url), ...searchEvidence.map((page) => page.url)].flatMap((url) => {
-    try { const target = siteUrl(url, site.domain); return target ? [target] : []; } catch { return []; }
-  }))];
-  return { domain: site.domain, topicCount: job.topicCount, funnelCounts: storedFunnelCounts(job.request, job.topicCount), pillar, existingTopics, knownPages, searchEvidence, metricsPeriod: window?.period ?? null, allowedInternalLinks };
+  const research = job.request && typeof job.request === "object" && "research" in job.request
+    ? savedResearchSchema.parse(job.request.research) : null;
+  return fitPlanReferences({ domain: site.domain, topicCount: job.topicCount, funnelCounts: storedFunnelCounts(job.request, job.topicCount),
+    pillar, ...(research && { reviewedKeywordIdeas: research.ideas }) }, { existingTopics, knownPages, searchEvidence, metricsPeriod: window?.period ?? null });
 }
 function leaseWhere(jobId: string, leaseToken: string, now: Date) {
-  return { id: jobId, status: "RUNNING" as const, leaseToken, leaseExpiresAt: { gt: now }, startedAt: { gt: new Date(now.getTime() - RUN_TIMEOUT_MS) } };
+  return { id: jobId, status: "RUNNING" as const, leaseToken, leaseExpiresAt: { gt: now }, startedAt: { gt: new Date(now.getTime() - RUN_TIMEOUT_MS) }, ...hostedLeaseScope() };
 }
 export async function runWorkerAction(db: PlannerDb, input: unknown, now = new Date()) {
   const action = workerActionSchema.parse(input);
-  await expireContentJobs(db, now);
-  await expireWorkbenchJobs(db, now);
+  const expiryScope = await managedUserScope(db);
+  if (!expiryScope.managed || expiryScope.userId) {
+    await expireContentJobs(db, now, undefined, expiryScope.userId ?? undefined);
+    await expireWorkbenchJobs(db, now, undefined, expiryScope.userId ?? undefined);
+  }
+  if (action.action === "begin") {
+    const where = { ...leaseWhere(action.jobId, action.leaseToken, now), executionAuthorizedAt: null };
+    const scope = await managedUserScope(db);
+    const scopedWhere = { ...where, ...(scope.managed && { site: { userId: scope.userId ?? "" } }) };
+    const owner = action.jobId.startsWith("aw_")
+      ? await db.aiWorkbenchJob.findFirst({ where: scopedWhere, select: { id: true } })
+      : await db.contentPlanJob.findFirst({ where: scopedWhere, select: { id: true } });
+    const allowed = Boolean(owner) && !desktopMaintenanceActive() && managedAllows("codex");
+    const data = allowed ? { executionAuthorizedAt: now } : {
+      status: "QUEUED" as const, leaseToken: null, leaseExpiresAt: null, startedAt: null,
+    };
+    const changed = action.jobId.startsWith("aw_")
+      ? await db.aiWorkbenchJob.updateMany({ where, data })
+      : await db.contentPlanJob.updateMany({ where, data });
+    return { ok: true, allowed: allowed && changed.count === 1 };
+  }
   if (action.action !== "claim" && action.jobId?.startsWith("aw_")) {
     if (!action.leaseToken) throw new ContentError("Provide both jobId and leaseToken for a job heartbeat");
     return runWorkbenchLease(db, { ...action, jobId: action.jobId, leaseToken: action.leaseToken }, now);
@@ -62,28 +91,45 @@ export async function runWorkerAction(db: PlannerDb, input: unknown, now = new D
   }
   if (action.action === "claim") {
     await workerSeen(db, action.workerId, now);
+    const decision = managedDecision();
+    const protocol = decision.enabled ? { managedProtocol: 2 } : {};
+    if (decision.enabled && action.protocolVersion !== 2) return { ...protocol, job: null };
+    if (desktopMaintenanceActive() || !decision.allowed || !decision.features.codex) return { ...protocol, job: null };
+    const scope = await managedUserScope(db);
+    if (scope.managed && !scope.userId) return { ...protocol, job: null };
+    const ownerFilter = { ...(scope.managed ? { site: { userId: scope.userId! } } : {}), ...hostedClaimScope() };
     const [candidate, workbench] = await Promise.all([
-      db.contentPlanJob.findFirst({ where: { status: "QUEUED" }, orderBy: { createdAt: "asc" } }),
-      db.aiWorkbenchJob.findFirst({ where: { status: "QUEUED" }, orderBy: { createdAt: "asc" }, select: { id: true, createdAt: true } }),
+      db.contentPlanJob.findFirst({ where: { status: "QUEUED", ...ownerFilter }, orderBy: { createdAt: "asc" } }),
+      db.aiWorkbenchJob.findFirst({ where: { status: "QUEUED", ...ownerFilter }, orderBy: { createdAt: "asc" }, select: { id: true, createdAt: true } }),
     ]);
-    if (workbench && (!candidate || workbench.createdAt < candidate.createdAt)) return claimWorkbenchJob(db, workbench.id, now);
-    if (!candidate) return { job: null };
+    if (desktopMaintenanceActive() || !managedAllows("codex")) return { ...protocol, job: null };
+    if (workbench && (!candidate || workbench.createdAt < candidate.createdAt)) {
+      return { ...protocol, ...(await claimWorkbenchJob(db, workbench.id, now)) };
+    }
+    if (!candidate) return { ...protocol, job: null };
     const leaseToken = randomUUID();
     const leaseExpiresAt = new Date(now.getTime() + LEASE_MS);
-    const changed = await db.contentPlanJob.updateMany({ where: { id: candidate.id, status: "QUEUED" },
-      data: { status: "RUNNING", leaseToken, leaseExpiresAt, startedAt: now } });
-    if (!changed.count) return { job: null };
+    const changed = await db.contentPlanJob.updateMany({ where: { id: candidate.id, status: "QUEUED", ...ownerFilter },
+      data: { status: "RUNNING", leaseToken, leaseExpiresAt, startedAt: now, executionAuthorizedAt: null,
+        ...(hostedContext.getStore() ? { hostedDeviceId: hostedContext.getStore()!.deviceId } : {}) } });
+    if (!changed.count) return { ...protocol, job: null };
     try {
       const isReview = candidate.kind === "ARTICLE_REVIEW";
       const context = isReview ? articleReviewRequestSchema.parse(candidate.request) : await claimContext(db, candidate);
+      if (!await managedSiteAllows(db, candidate.siteId)) {
+        await db.contentPlanJob.updateMany({ where: { id: candidate.id, status: "RUNNING", leaseToken },
+          data: { status: "QUEUED", leaseToken: null, leaseExpiresAt: null, startedAt: null } });
+        return { ...protocol, job: null };
+      }
       const saved = await db.contentPlanJob.updateMany({ where: { id: candidate.id, status: "RUNNING", leaseToken },
         data: { context: context as Prisma.InputJsonValue } });
       if (!saved.count) throw new ContentError("Job lease is no longer valid", 409);
-      return { job: { jobId: candidate.id, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(),
+      return { ...protocol, job: { jobId: candidate.id, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(),
         prompt: isReview ? articleReviewPrompt(articleReviewRequestSchema.parse(context)) : buildContentPrompt(context as Awaited<ReturnType<typeof claimContext>>), outputSchema: isReview ? z.toJSONSchema(articleReviewSchema, { target: "draft-7" }) : outputSchema } };
     } catch (error) {
       await db.contentPlanJob.updateMany({ where: { id: candidate.id, leaseToken, status: "RUNNING" },
-        data: { status: "FAILED", activeKey: null, leaseToken: null, leaseExpiresAt: null, finishedAt: now, error: "Unable to prepare generation context" } });
+        data: { status: "FAILED", activeKey: null, leaseToken: null, leaseExpiresAt: null, finishedAt: now,
+          error: error instanceof ContentError && error.message === PLAN_TOO_LARGE ? PLAN_TOO_LARGE : "Unable to prepare generation context" } });
       throw error;
     }
   }

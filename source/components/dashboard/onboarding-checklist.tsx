@@ -55,7 +55,7 @@ export function OnboardingChecklist({
     {
       id: "add-site",
       label: t("Add a site", "添加站点"),
-      description: t("Connect a Google Search Console property to monitor", "连接需要监测的 Google Search Console 资源"),
+      description: t("Enter a domain or import a Search Console property", "输入网站域名，或导入 Search Console 资源"),
       icon: <Globe className="size-4" />,
       done: hasSites,
       href: "/sites",
@@ -63,11 +63,11 @@ export function OnboardingChecklist({
     },
     {
       id: "connect-gsc",
-      label: t("Connect GSC", "连接 GSC"),
+      label: t("Connect GSC (optional)", "连接 GSC（可选）"),
       description: t("Link your Google Search Console for keyword and page data", "连接 Google Search Console，获取关键词和页面数据"),
       icon: <Link2 className="size-4" />,
       done: hasGscConnected,
-      href: firstSiteId ? `/sites/${firstSiteId}` : "/sites",
+      href: firstSiteId ? `/sites/${firstSiteId}/settings#gsc-connection` : "/sites",
       actionLabel: t("Connect", "连接"),
     },
     {

@@ -1,0 +1,7 @@
+# Install as /etc/cron.d/aborder-hosted-backup, root:root 0644.
+# 19:40 UTC = 03:40 Asia/Shanghai next day. Does not edit any other cron jobs.
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+CRON_TZ=UTC
+MAILTO=""
+40 19 * * * root /bin/bash /www/aborder-hosted/daily-backup.sh --run

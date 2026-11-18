@@ -29,10 +29,10 @@ services:
     logging: *bounded-logging
 
   app:
-    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.1.2}
+    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.5.6}
     restart: unless-stopped
     env_file:
-      - .env
+      - ${ABORDER_ENV_FILE:-.env}
     environment:
       <<: *runtime-env
       WORKER_MODE: "off"
@@ -55,11 +55,11 @@ services:
     logging: *bounded-logging
 
   worker:
-    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.1.2}
+    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.5.6}
     restart: unless-stopped
     command: ["node", "worker.cjs"]
     env_file:
-      - .env
+      - ${ABORDER_ENV_FILE:-.env}
     environment:
       <<: *runtime-env
       WORKER_MODE: worker

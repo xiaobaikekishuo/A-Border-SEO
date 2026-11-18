@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 // source for those metrics, see lib/seo-metrics.ts) already has data.
 
 const counts = vi.hoisted(() => ({ keywords: 0, pages: 0, crawls: 0 }));
+const coverage = vi.hoisted((): { gscProperty: string }[] => []);
 const siteRows = vi.hoisted(() => ({ empty: false }));
 
 vi.mock("@/lib/auth", () => ({ auth: async () => ({ user: { id: "user-1" } }) }));
@@ -30,6 +31,7 @@ vi.mock("@/lib/db", () => ({
                 gscProperty: "https://a.example/",
                 createdAt: new Date("2026-03-01T00:00:00Z"),
                 _count: counts,
+                gscSyncCoverage: coverage,
               },
             ],
     },
@@ -40,6 +42,7 @@ vi.mock("@/lib/seo-metrics", async (importOriginal) => {
   return {
     ...actual,
     getSitePeriodMetrics: async () => ({
+      basis: "property", coverage: { currentReportedDays: 28 },
       current: { clicks: 120, impressions: 4800, avgPosition: 9.2, avgCtr: 0.025, uniqueKeywords: 0 },
       previous: { clicks: 90, impressions: 4000, avgPosition: 11.4, avgCtr: 0.0225, uniqueKeywords: 0 },
       deltas: { clicks: 33.3, impressions: 20, avgPosition: 2.2, avgCtr: 11.1 },
@@ -96,6 +99,12 @@ describe("All sites home", () => {
 });
 
 describe("All sites keyword-vs-page gates", () => {
+  it("shows property totals even if Google returned no page or query details", async () => {
+    coverage.push({ gscProperty: "https://a.example/" });
+    try {
+      expect(await render({ keywords: 0, pages: 0, crawls: 0 })).toContain("GSC property totals");
+    } finally { coverage.length = 0; }
+  });
   it("treats a site with pages but no keywords as synced and shows its metrics", async () => {
     const html = await render({ keywords: 0, pages: 27, crawls: 1 });
     // The card must NOT hide the site behind the waiting state.

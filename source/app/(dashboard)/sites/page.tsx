@@ -1,6 +1,7 @@
 import { getI18n } from "@/lib/i18n/server";
 import Link from "next/link";
 import { auth } from "@/lib/auth";
+import { redirect } from "next/navigation";
 import { db } from "@/lib/db";
 import { getSitePeriodMetrics, formatCompact } from "@/lib/seo-metrics";
 import { PageHeader } from "@/components/ui/page-header";
@@ -16,13 +17,15 @@ import { cn } from "@/lib/utils";
 export default async function AllSitesPage() {
   const { t, locale } = await getI18n();
   const session = await auth();
+  if (!session?.user?.id) redirect("/login");
 
   const sites = await db.site.findMany({
-    where: { userId: session?.user?.id },
+    where: { userId: session.user.id },
     select: {
       id: true,
       domain: true,
       gscProperty: true,
+      gscSyncCoverage: { where: { propertyChecked: true }, distinct: ["gscProperty"], select: { gscProperty: true } },
       createdAt: true,
       _count: { select: { keywords: true, pages: true, crawls: true } },
     },
@@ -32,7 +35,8 @@ export default async function AllSitesPage() {
   // Search Console anonymises the query dimension on low-traffic sites, so a
   // synced site can have pages but no keywords. Either one means data arrived.
   const hasData = (s: (typeof sites)[number]) =>
-    s._count.keywords > 0 || s._count.pages > 0;
+    s._count.keywords > 0 || s._count.pages > 0 ||
+    s.gscSyncCoverage.some(row => row.gscProperty === s.gscProperty);
 
   if (sites.length === 0) {
     return (
@@ -50,7 +54,7 @@ export default async function AllSitesPage() {
         <EmptyState
           illustration="empty-sites"
           title={t("No sites connected", "尚未连接站点")}
-          description={t("Choose a domain or URL-prefix property from Search Console. A-Border SEO stores your metrics locally and asks for read-only access.", "从 Search Console 选择网域或网址前缀资源。A-Border SEO 在本地保存指标，仅申请只读权限。")}
+          description={t("Add a domain to use site crawl and the Codex workbench. You can connect Google Search Console later for search metrics.", "输入域名即可使用网站抓取和 Codex 工作台，需要搜索指标时再连接 Google Search Console。")}
           action={<AddSiteModal triggerLabel={t("Connect first site", "连接第一个站点")} />}
         />
       </div>
@@ -113,18 +117,18 @@ export default async function AllSitesPage() {
 
               {!metrics ? (
                 <div className="mt-5 rounded-md border border-dashed border-line-strong px-3 py-4 text-sm text-muted-foreground">
-                  {t("Waiting for first GSC sync…", "等待首次 GSC 同步…")}</div>
+                  {site.gscProperty ? t("Waiting for first GSC sync…", "等待首次 GSC 同步…") : t("Ready for site crawl and the Codex workbench.", "可开始网站抓取和 Codex 工作台任务。")}</div>
               ) : (
                 <div className="mt-5 grid grid-cols-2 gap-3">
                   <Stat
                     label={t("Clicks", "点击量")}
-                    value={formatCompact(metrics.current.clicks)}
+                    value={metrics.coverage.currentReportedDays > 0 ? formatCompact(metrics.current.clicks) : t("Not reported", "未报告")}
                     delta={metrics.deltas.clicks === null ? t("Not comparable", "暂不可比") : formatDeltaPercent(metrics.deltas.clicks)}
                     positive={metrics.deltas.clicks === null ? undefined : metrics.deltas.clicks >= 0}
                   />
                   <Stat
                     label={t("Impressions", "曝光量")}
-                    value={formatCompact(metrics.current.impressions)}
+                    value={metrics.coverage.currentReportedDays > 0 ? formatCompact(metrics.current.impressions) : t("Not reported", "未报告")}
                     delta={metrics.deltas.impressions === null ? t("Not comparable", "暂不可比") : formatDeltaPercent(metrics.deltas.impressions)}
                     positive={metrics.deltas.impressions === null ? undefined : metrics.deltas.impressions >= 0}
                   />
@@ -149,6 +153,10 @@ export default async function AllSitesPage() {
                 </div>
               )}
 
+              {metrics && <p className="mt-4 text-xs text-muted-foreground">
+                {metrics.basis === "property" ? t("GSC property totals", "GSC 资源总计") : t("GSC page totals", "GSC 页面明细合计")}
+                {" · "}{t("{n}/28 days reported", "有数据的天数：{n}/28", { n: metrics.coverage.currentReportedDays })}
+              </p>}
               <p className="mt-4 font-data text-[12px] text-muted-foreground">
                 {t("{keywords} keyword rows · {pages} page rows · {crawls} crawls", "{keywords} 条关键词记录 · {pages} 条页面记录 · {crawls} 次抓取", { keywords: formatCompact(site._count.keywords), pages: formatCompact(site._count.pages), crawls: site._count.crawls })}
               </p>
@@ -158,7 +166,8 @@ export default async function AllSitesPage() {
             </Link>
 
             <div className="mt-4 border-t border-border pt-4">
-              <SyncButton siteId={site.id} variant="outline" size="sm" messageSide="end" />
+              {site.gscProperty ? <SyncButton siteId={site.id} variant="outline" size="sm" messageSide="end" />
+                : <Link href={`/sites/${site.id}/settings#gsc-connection`} className="text-sm text-primary hover:underline">{t("Connect Search Console", "连接 Search Console")}</Link>}
             </div>
           </div>
         ))}

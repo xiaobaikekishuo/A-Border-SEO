@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
+import { ReportAnalysisLink } from "@/components/ai-workbench/report-analysis-link";
 import { EmptyState } from "@/components/ui/empty-state";
 import { VitalsButton, IndexCheckButton } from "@/components/sites/action-buttons";
 import { VitalsTable } from "@/components/sites/vitals-table";
@@ -33,7 +34,10 @@ export default async function VitalsPage({ params }: Props) {
       <PageHeader
         title={t("Core Web Vitals", "核心网页指标")}
         description={t("PageSpeed Insights lab data for your top pages. Set GOOGLE_PAGESPEED_KEY for a higher quota.", "主要页面的 PageSpeed Insights 实验室数据。配置 GOOGLE_PAGESPEED_KEY 可提高配额。")}
-        actions={<VitalsButton siteId={siteId} />}
+        actions={<>
+          <VitalsButton siteId={siteId} />
+          <ReportAnalysisLink siteId={siteId} scope="performance" t={t} />
+        </>}
       />
 
       {reports.length === 0 ? (

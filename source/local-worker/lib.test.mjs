@@ -1,12 +1,22 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_DISABLED_FEATURES, LIMITS, PROMPT_PREAMBLE, childEnv, execArgs, failureFromExit, generateToken, isLoopbackHost, loginArgs,
-  parseBaseUrl, parseConfig, promptText, reportedUsage, safeCode, schemaText, summarizeEvents, tokenFrom, validateClaim,
+  parseBaseUrl, parseConfig, promptText, reportedUsage, safeCode, schemaText, summarizeEvents, tokenFrom, validateClaim, workerHeaders,
 } from "./lib.mjs";
 
 const posix = (env = {}, argv = []) => parseConfig({ ABORDER_WORKER_RUNTIME: "/tmp/aborder-worker", ABORDER_CODEX_HOME: "/tmp/aborder-codex", ...env }, argv, "linux");
 
 describe("configuration", () => {
+  it("binds hosted requests to account/device/version and never passes the device token to Codex", () => {
+    const env = { ABORDER_HOSTED_WORKER: "1", ABORDER_INSTALLATION_ID: "device-a", ABORDER_ACCOUNT_ID: "account-a",
+      ABORDER_PRODUCT_ID: "a-border-seo", ABORDER_DESKTOP_VERSION: "1.5.0", LOCAL_CONTENT_WORKER_TOKEN: "test-token" };
+    const config = posix(env);
+    expect(workerHeaders(config, "test-token")).toMatchObject({ Authorization: "Bearer test-token", "X-Aborder-Installation-Id": "device-a", "X-Aborder-Desktop-Version": "1.5.0" });
+    expect(childEnv(env, config)).not.toHaveProperty("LOCAL_CONTENT_WORKER_TOKEN");
+    expect(() => posix({ ...env, ABORDER_INSTALLATION_ID: "../wrong" })).toThrow("invalid_config");
+    expect(() => posix({ ...env, ABORDER_DESKTOP_VERSION: "" })).toThrow("invalid_config");
+  });
   it("defaults to the local app, low reasoning and every tool feature disabled", () => {
     const config = posix();
     expect(config).toMatchObject({ mode: "watch", baseUrl: "http://localhost:3300", codexBin: null, model: null, reasoning: "low", timeoutSeconds: 540, extraArgs: [] });
@@ -104,7 +114,7 @@ describe("Codex invocation", () => {
   });
   it("passes an allowlisted environment without API keys", () => {
     const env = childEnv({ PATH: "/usr/bin", HOME: "/home/a", OPENAI_API_KEY: "sk-test", CODEX_API_KEY: "x", AWS_SECRET_ACCESS_KEY: "y" }, posix());
-    expect(env).toMatchObject({ PATH: "/usr/bin", HOME: "/home/a", CODEX_HOME: "/tmp/aborder-codex", TERM: "dumb", NO_PROXY: "localhost,127.0.0.1,::1" });
+    expect(env).toMatchObject({ PATH: "/usr/bin", HOME: "/home/a", CODEX_HOME: resolve("/tmp/aborder-codex"), TERM: "dumb", NO_PROXY: "localhost,127.0.0.1,::1" });
     expect(env).not.toHaveProperty("OPENAI_API_KEY");
     expect(env).not.toHaveProperty("CODEX_API_KEY");
     expect(env).not.toHaveProperty("AWS_SECRET_ACCESS_KEY");

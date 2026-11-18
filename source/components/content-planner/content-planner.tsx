@@ -13,13 +13,14 @@ import { BulkImport } from "./bulk-import";
 import { ManagedArticleTable } from "./bulk-manage";
 import { plannerApiError } from "./api-messages";
 import { FunnelDistribution, FunnelSummary } from "./funnel-distribution";
+import type { ReviewedKeywordSelection } from "@/lib/content-planner/keyword-selection";
 import { presetFunnelCounts, validFunnelCounts, type FunnelCounts, type FunnelPreset } from "@/lib/content-planner/funnel";
 import s from "./planner.module.css";
 import b from "./bulk.module.css";
 
 type Tab = "pillars" | "articles" | "board" | "map" | "guide";
 type Panel = { kind: "review"; jobId?: string } | { kind: "import" } | { kind: "pillar"; item?: Pillar } | { kind: "cluster"; item?: Cluster; pillarId?: string; funnel?: Funnel } |
-  { kind: "brief"; item: Cluster } | { kind: "plan"; pillarId: string; jobId?: string } |
+  { kind: "brief"; item: Cluster } | { kind: "plan"; pillarId: string; jobId?: string; useResearch?: boolean } |
   { kind: "delete"; entity: "pillar" | "cluster"; item: Pillar | Cluster } | null;
 const EMPTY_PILLARS: Pillar[] = [];
 function getTabs(t: Translator) { return [
@@ -32,7 +33,9 @@ function Notice({ children, tone = "info", action }: { children: ReactNode; tone
   return <div className={`${s.notice} ${tone === "error" ? s.noticeError : tone === "success" ? s.noticeSuccess : ""}`} role={tone === "error" ? "alert" : "status"}><Info size={17} /><div>{children}</div>{action}</div>;
 }
 
-export function ContentPlanner({ siteId, domain, initialData }: { siteId: string; domain: string; initialData?: PlannerData }) {
+export function ContentPlanner({ siteId, domain, initialData, research }: {
+  siteId: string; domain: string; initialData?: PlannerData; research?: ReviewedKeywordSelection | null;
+}) {
   const { t } = useI18n();
   const { FUNNELS, STATUSES, SOURCE_LABELS } = getPlannerLabels(t);
   const [data, setData] = useState<PlannerData | null>(initialData ?? null);
@@ -117,6 +120,22 @@ export function ContentPlanner({ siteId, domain, initialData }: { siteId: string
     <div className={s.workspace}>
       <div className={s.intro}><div><span className={s.eyebrow}>{t("Give every article a clear purpose", "让每一篇内容，都有明确的位置")}</span><h2>{t("Build a content journey around your topics.", "围绕主题，建立内容路径。")}</h2><p>{t("Start with readers' questions. Connect pillars, focused topics, and actionable writing briefs.", "从读者的问题出发，连接总览主题、具体选题与可执行的写作简报。")}</p></div><button className={s.secondary} onClick={() => setTab("guide")}><BookOpen size={16} />{t("Pillars and clusters in a minute", "一分钟认识 Pillar / Cluster")}<ArrowRight size={15} /></button></div>
       {!panel && errorNotice}
+      {research === null && <Notice tone="error">{t("This keyword selection is unavailable. Select keywords again from a completed research task for this site.", "这些关键词无法读取。请回到当前站点已完成的关键词研究，重新选择。")}</Notice>}
+      {research && <section className={s.researchSelection} aria-label={t("Selected research keywords", "已选研究关键词")}>
+        <h3>{t("Plan with {count} selected keywords", "用已选的 {count} 个关键词规划内容", { count: research.ideas.length })}</h3>
+        <p>{research.ideas.map(idea => idea.keyword).join(" · ")}</p>
+        {pillars.length > 0 ? <form onSubmit={event => {
+          event.preventDefault();
+          const pillarId = new FormData(event.currentTarget).get("pillarId");
+          if (typeof pillarId === "string" && pillars.some(pillar => pillar.id === pillarId)) open({ kind: "plan", pillarId, useResearch: true });
+        }}>
+          <label>{t("Existing pillar", "已有总览主题")}<select name="pillarId" required defaultValue="">
+            <option value="" disabled>{t("Choose a pillar", "选择主题")}</option>
+            {pillars.map(pillar => <option key={pillar.id} value={pillar.id}>{pillar.title}</option>)}
+          </select></label>
+          <button className={s.secondary} type="submit" disabled={Boolean(busy || activeJob)}>{t("Preview plan settings", "预览选题设置")}</button>
+        </form> : data && <p>{t("Create a pillar below to use these keywords.", "先在下方新建主题，即可使用这些关键词。")}</p>}
+      </section>}
       {toast && <div className={s.toast} role="status"><CheckCircle2 size={17} />{toast}<button aria-label={t("Dismiss notice", "关闭提示")} onClick={() => setToast(null)}><X size={15} /></button></div>}
       <div className={s.metrics} aria-label={t("Planning metrics for this site", "当前站点规划指标")}>
         <Metric label={t("Pillars", "总览主题 · Pillars")} value={String(stats.pillars)} hint={t("Organize content around core questions", "围绕核心问题组织内容")} icon={<Layers />} tone="violet" />
@@ -150,8 +169,13 @@ export function ContentPlanner({ siteId, domain, initialData }: { siteId: string
     {panel?.kind === "cluster" && <Modal wide title={panel.item ? t("Edit topic", "编辑具体选题") : t("Add topic", "添加具体选题")} eyebrow={t("CLUSTER", "具体选题")} description={t("Each article answers one clear question, with its own brief, schedule, and status.", "每篇内容只解决一个明确的问题，并记录简报、排期与状态。")} onClose={close}>{errorNotice}<ClusterForm key={panel.item?.id ?? panel.pillarId ?? "new"} item={panel.item} pillars={pillars} initialPillarId={panel.pillarId} initialFunnel={panel.funnel} domain={domain} busy={Boolean(busy)} onSave={save} onCancel={close} /></Modal>}
     {panel?.kind === "delete" && <Modal title={panel.entity === "pillar" ? t("Delete this pillar?", "删除这个总览主题？") : t("Delete this topic?", "删除这个选题？")} onClose={close}>{errorNotice}<div className={s.deleteContent}><Trash2 size={30} /><h3>{panel.item.title}</h3><p>{panel.entity === "pillar" ? t("This also deletes its {v0} topics, briefs, and related planning records.", "同时删除其下 {v0} 个选题、简报及相关规划记录。", { v0: (panel.item as Pillar).clusters.length }) : t("This topic's brief, schedule, and local status will also be deleted.", "该选题的简报、排期与本地状态会一并删除。")}{t("Only local planning is affected. Website pages are not deleted.", "本次操作只影响本地规划，不删除网站页面。")}</p></div><div className={s.formActions}><button className={s.secondary} disabled={Boolean(busy)} onClick={close}>{t("Keep content", "保留内容")}</button><button className={s.danger} disabled={Boolean(busy)} onClick={async () => { if (await mutate(panel.entity === "pillar" ? { action: "deletePillar", pillarId: panel.item.id } : { action: "deleteCluster", clusterId: panel.item.id })) { setPanel(null); setToast(t("Local planning item deleted.", "已删除本地规划条目。")); } }}>{busy ? t("Deleting…", "删除中…") : t("Confirm deletion", "确认删除")}</button></div></Modal>}
     {panel?.kind === "brief" && <Modal wide title={panel.item.title} eyebrow={t("CONTENT BRIEF", "CONTENT BRIEF · 内容简报")} description={t("{v0} · {v1} · Not a finished article", "{v0} · {v1} · 不是已完成的文章", { v0: panel.item.keyword, v1: SOURCE_LABELS[panel.item.source] })} onClose={close}>{errorNotice}<div className={s.briefToolbar}><FunnelBadge funnel={panel.item.funnel} /><div><button className={s.secondary} disabled={!panel.item.brief} onClick={() => { void exportBrief(panel.item, true); }}><Copy size={15} />{t("Copy", "复制")}</button><button className={s.secondary} disabled={!panel.item.brief} onClick={() => { void exportBrief(panel.item, false); }}><Download size={15} />{t("Export Markdown", "导出 Markdown")}</button><button className={s.primary} onClick={() => open({ kind: "cluster", item: panel.item })}><Pencil size={15} />{t("Edit", "编辑")}</button></div></div><OptimizationTasks optimization={panel.item.optimization} outcome={rows.find(row => row.id === panel.item.id)?.updateOutcome} busy={!!busy} onRecord={async () => { await mutate({ action: "recordWebsiteUpdate", clusterId: panel.item.id }); }} />{panel.item.brief ? <BriefContent brief={panel.item.brief} domain={domain} /> : <Empty icon={<FileText />} title={t("This topic has no brief yet", "这个选题还没有简报")} text={t("Add an outline, key points, and internal links manually, or return to the pillar and ask AI for topics with briefs.", "可以手动补充大纲、要点和站内链接；也可以回到所属主题，让 AI 提出一组带简报的选题。")} action={<button className={s.primary} onClick={() => open({ kind: "cluster", item: panel.item })}>{t("Add a brief", "补充简报")}</button>} />}</Modal>}
-    {panel?.kind === "plan" && <Modal wide title={planPillar?.title ?? t("AI content planning", "AI 内容规划")} eyebrow={t("AI PLANNER · Review before import", "AI PLANNER · 先审阅，再导入")} description={t("Uses your ChatGPT account allowance to plan topics and briefs, not full articles.", "使用 ChatGPT 账号额度，只规划选题与内容简报，不生成整篇文章。")} onClose={close}>{errorNotice}<PlanPanel key={panel.jobId ?? panel.pillarId} pillar={planPillar} job={planJob} workerOnline={data?.worker.online ?? false} domain={domain} busy={Boolean(busy)} otherJob={Boolean(activeJob && activeJob.id !== panel.jobId)} onRefresh={() => { void refresh(); }} onStart={async (topicCount) => {
-      const result = await mutate({ action: "startPlan", pillarId: panel.pillarId, topicCount: topicCount.total, funnelCounts: topicCount.funnelCounts });
+    {panel?.kind === "plan" && <Modal wide title={planPillar?.title ?? t("AI content planning", "AI 内容规划")} eyebrow={t("AI PLANNER · Review before import", "AI PLANNER · 先审阅，再导入")} description={t("Uses your ChatGPT account allowance to plan topics and briefs, not full articles.", "使用 ChatGPT 账号额度，只规划选题与内容简报，不生成整篇文章。")} onClose={close}>{errorNotice}
+      {panel.useResearch && research && !planJob && <Notice>{t("Selected research keywords", "已选研究关键词")} · {research.ideas.map(idea => idea.keyword).join(" · ")}</Notice>}
+      {planJob?.keywordSelection && <Notice>{t("This plan uses {count} keywords from its original research selection.", "这份规划沿用原研究任务中选定的 {count} 个关键词。", { count: planJob.keywordSelection.indexes.length })}</Notice>}
+      <PlanPanel key={panel.jobId ?? panel.pillarId} pillar={planPillar} job={planJob} workerOnline={data?.worker.online ?? false} domain={domain} busy={Boolean(busy)} otherJob={Boolean(activeJob && activeJob.id !== panel.jobId)} onRefresh={() => { void refresh(); }} onStart={async (topicCount) => {
+      const keywordSelection = panel.useResearch && research ? research.reference : planJob?.keywordSelection;
+      const result = await mutate({ action: "startPlan", pillarId: panel.pillarId, topicCount: topicCount.total, funnelCounts: topicCount.funnelCounts,
+        ...(keywordSelection && { keywordSelection }) });
       const job = result?.job as { id?: string } | undefined;
       if (job?.id) setPanel({ ...panel, jobId: job.id });
     }} onApply={async (topicIndexes, updateExistingBriefs) => {

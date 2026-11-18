@@ -9,7 +9,7 @@ vi.mock("@/lib/seo-metrics", () => ({ getSitePeriodMetrics }));
 import { GET, POST } from "./route";
 const overview = { organicKeywords: 120, organicTraffic: 300, organicCost: 40, backlinks: 0, referringDomains: 0 };
 const backlinks = { totalBacklinks: 42, referringDomains: 12, referringIps: 10, dofollow: 30, nofollow: 12 };
-const metrics = { current: { clicks: 7, impressions: 80, avgPosition: 12, uniqueKeywords: 1 }, deltas: { clicks: null } };
+const metrics = { current: { clicks: 7, impressions: 80, avgPosition: 12, uniqueKeywords: 1 }, deltas: { clicks: null }, coverage: { currentReportedDays: 1 } };
 const confirmation = { provider: "dataforseo", confirmed: true, operations: 2, language: "en", location: 2840 };
 function get(domain?: string, body?: unknown) {
   const url = new URL("http://localhost/api/sites/site-1/domain-overview");
@@ -23,6 +23,12 @@ beforeEach(() => {
   domainOverview.mockResolvedValue(overview); backlinksOverview.mockResolvedValue(backlinks); getSitePeriodMetrics.mockResolvedValue(metrics);
 });
 describe("domain research confirmation", () => {
+  it("preserves the difference between zero clicks and an unreported period", async () => {
+    for (const reported of [0, 1]) {
+      getSitePeriodMetrics.mockResolvedValueOnce({ ...metrics, current: { ...metrics.current, clicks: 0 }, coverage: { currentReportedDays: reported } });
+      expect((await (await get()).json()).overview.organicTraffic).toBe(reported ? 0 : null);
+    }
+  });
   it("GET uses local GSC even when a paid provider is available", async () => {
     const response = await get();
     expect(await response.json()).toMatchObject({ source: "gsc", domain: "own.example", overview: { organicKeywords: 1, organicTraffic: 7 }, metrics });

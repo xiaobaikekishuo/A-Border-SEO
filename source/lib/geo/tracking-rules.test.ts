@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildPlatformStatuses, type OverviewInput } from "./platform-overview";
+import { parseReportFiles } from "./reports";
 import type { ProbeReport } from "./probe";
 import { analyzeRecord, estimateRun, parseSettings, settingsOf, storedBrands, summarizeByPlatform } from "./tracking";
 import { askWithRetry, runStatus } from "./visibility-job";
@@ -92,7 +93,8 @@ describe("retrying a task", () => {
 describe("platform overview", () => {
   const empty: OverviewInput = {
     probe: null, eligibility: null,
-    google: { connected: false, pages: 0, date: null }, bing: { connected: false, inIndex: null, date: null },
+    google: { connected: false, pages: 0, coverage: { start: "2026-10-18", end: "2026-11-14", days: 0, expected: 28 } },
+    bing: { connected: false, inIndex: null, date: null, stale: false },
     reports: { GSC_AI: null, BING_AI: null }, visibility: {}, tracked: [], ga4: null, bots: null,
   };
 
@@ -106,6 +108,18 @@ describe("platform overview", () => {
     expect(chatgpt.access.state).toBe("UNKNOWN");
     expect(chatgpt.eligibility.state).toBe("UNKNOWN");
     expect(statuses.find(s => s.id === "GOOGLE_AIO")!.report).toMatchObject({ state: "UNKNOWN", kind: "GSC_AI" });
+  });
+
+  it.each([
+    ["Grounding query,Citations\nwidget,14", null, "UNKNOWN"],
+    ["Page,Citations\nhttps://example.test/a,14", null, "UNKNOWN"],
+    ["Date,Citations\n2026-11-01,0", 0, "WARN"],
+    ["Date,Citations\n2026-11-01,14\n2026-11-02,2", 16, "GOOD"],
+  ])("preserves the meaning of an imported Bing export %s", (csv, total, state) => {
+    const parsed = parseReportFiles("BING_AI", [{ name: "export.csv", text: String(csv) }], "example.test");
+    const reports = { GSC_AI: null, BING_AI: { ...parsed, updatedAt: "2026-11-03T00:00:00Z" } };
+    const copilot = buildPlatformStatuses({ ...empty, reports }).find(row => row.id === "COPILOT");
+    expect(copilot?.report).toMatchObject({ imported: true, state, total });
   });
 
   it("flags a blocked search crawler, not a blocked training crawler", () => {

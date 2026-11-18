@@ -6,6 +6,7 @@ import { crawlPageCeiling } from "@/lib/jobs/policy";
 import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/ui/page-header";
+import { ReportAnalysisLink } from "@/components/ai-workbench/report-analysis-link";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CrawlButton } from "@/components/sites/action-buttons";
 import { CrawlStatusPoller } from "@/components/sites/crawl-status-poller";
@@ -92,7 +93,10 @@ export default async function CrawlPage({ params, searchParams }: Props) {
             ? t("Crawl {date} · {pages} crawled", "抓取时间 {date} · 已抓取 {pages}", {date: crawledAt ?? "", pages: locale === "zh" ? `${pageStats.pages} 个页面` : plural(pageStats.pages, "page")})
             : t("No crawl yet", "暂无抓取记录")
         }
-        actions={<CrawlButton siteId={siteId} pageCeiling={crawlPageCeiling()} />}
+        actions={<>
+          <CrawlButton siteId={siteId} pageCeiling={crawlPageCeiling()} />
+          <ReportAnalysisLink siteId={siteId} scope="audit" t={t} />
+        </>}
       />
 
       {/* Queued or running crawl indicator */}

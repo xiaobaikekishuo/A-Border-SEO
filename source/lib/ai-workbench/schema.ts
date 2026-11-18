@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { DiagnosticEvidence } from "./diagnostic-types";
 import type { ResearchEvidence } from "./research-analysis";
+import { actionScopes, type ReportSource } from "./action-scope";
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 export const diagnosticSelectionSchema = z.object({
@@ -24,6 +25,7 @@ export const workbenchRequestSchema = z.object({
   keyword: z.string().trim().max(250).default(""), language: z.enum(["zh-CN", "en"]).default("zh-CN"),
   pageId: text(200).optional(), clusterId: text(200).optional(), body: z.string().trim().max(24000).default(""),
   diagnosis: diagnosticSelectionSchema.optional(),
+  actionScope: z.enum(actionScopes).optional(), evidenceRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   keywordResearch: keywordResearchSettingsSchema.optional(),
   researchAnalysis: researchAnalysisSettingsSchema.optional(),
 }).strict();
@@ -37,6 +39,10 @@ export const paragraphEditSchema = z.object({
   sourceText: z.string().min(10).max(8000), replacementText: z.string().max(10000),
   reason: text(1500), evidence: z.array(text(1500)).min(1).max(8), verification: z.array(text(1500)).min(1).max(8),
 }).strict();
+const reportActionSchema = z.object({
+  title: text(250), reason: text(1000), nextStep: text(1500), verify: text(1000),
+  evidenceRefs: z.array(text(100)).min(1).max(6),
+}).strict();
 export const workbenchResultSchema = z.object({
   title: text(250), summary: text(3000), contentMarkdown: text(50000),
   metaTitle: z.string().trim().max(300), metaDescription: z.string().trim().max(1000),
@@ -44,11 +50,16 @@ export const workbenchResultSchema = z.object({
   internalLinks: z.array(z.object({ target: text(2048), anchor: text(300), reason: text(1000) }).strict()).max(20),
   paragraphEdits: z.array(paragraphEditSchema).max(12).optional(),
   keywordIdeas: z.array(keywordIdeaSchema).max(24).optional(),
+  reportActions: z.array(reportActionSchema).max(3).optional(),
 }).strict();
 // Inference uses a required array; historical stored results may omit it.
-export const workbenchGenerationSchema = workbenchResultSchema.omit({ keywordIdeas: true }).extend({ paragraphEdits: z.array(paragraphEditSchema).max(12) });
+export const workbenchGenerationSchema = workbenchResultSchema.omit({ keywordIdeas: true, reportActions: true }).extend({ paragraphEdits: z.array(paragraphEditSchema).max(12) });
 export const keywordResearchGenerationSchema = workbenchGenerationSchema.extend({ keywordIdeas: z.array(keywordIdeaSchema).min(1).max(24) });
-export function generationSchemaFor(kind: string) { return kind === "KEYWORD_RESEARCH" ? keywordResearchGenerationSchema : workbenchGenerationSchema; }
+const reportGenerationSchema = workbenchGenerationSchema.extend({ reportActions: z.array(reportActionSchema).max(3) });
+export function generationSchemaFor(kind: string, actionScope?: string) {
+  if (kind === "SEO_FIX_PLAN" && actionScope) return reportGenerationSchema;
+  return kind === "KEYWORD_RESEARCH" ? keywordResearchGenerationSchema : workbenchGenerationSchema;
+}
 export type WorkbenchRequest = z.infer<typeof workbenchRequestSchema>;
 export type WorkbenchResult = z.infer<typeof workbenchResultSchema>;
 
@@ -58,6 +69,7 @@ export type WorkbenchJobView = {
   error: string | null; draftText: string | null; result: WorkbenchResult | null;
   diagnosis?: Omit<DiagnosticEvidence, "pages" | "page"> & { page: Omit<NonNullable<DiagnosticEvidence["page"]>, "body"> | null };
   researchEvidence?: ResearchEvidence;
+  reportSources?: ReportSource[];
 };
 export type WorkbenchWorkspace = {
   site: { id: string; domain: string };

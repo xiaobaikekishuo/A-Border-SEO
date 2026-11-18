@@ -128,6 +128,28 @@ describe("pinned ChatGPT app workbench inference", () => {
     expect(await runPlanInference(input, new AbortController().signal)).toEqual({ ok: false });
     expect(await db.aiWorkbenchJob.findUniqueOrThrow({ where: { id: input.jobId } })).toMatchObject({ status: "FAILED", error: "canceled", result: null });
   });
+  it("rechecks cancellation after model discovery before starting paid generation", async () => {
+    auth.listPlanModels.mockImplementationOnce(async () => {
+      await db.aiWorkbenchJob.update({ where: { id: input.jobId }, data: { status: "FAILED", error: "canceled", leaseToken: null } });
+      return [{ slug: "account-model" }];
+    });
+    expect(await runPlanInference(input, new AbortController().signal)).toEqual({ ok: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("aborts an in-flight upstream request when the server revokes its lease", async () => {
+    let started!: () => void;
+    const waiting = new Promise<void>(resolve => { started = resolve; });
+    fetchMock.mockImplementationOnce(async (_url, init) => new Promise((_, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+      started();
+    }));
+    const running = runPlanInference(input, new AbortController().signal);
+    await waiting;
+    await db.aiWorkbenchJob.update({ where: { id: input.jobId }, data: { status: "FAILED", error: "canceled", leaseToken: null } });
+    expect(await running).toEqual({ ok: false });
+    expect(fetchMock.mock.calls[0][1].signal.aborted).toBe(true);
+    expect(await db.aiWorkbenchJob.findUniqueOrThrow({ where: { id: input.jobId } })).toMatchObject({ status: "FAILED", error: "canceled", result: null });
+  }, 15000);
   it("old helpers receive no executable CLI prompt for an app job", async () => {
     await db.aiWorkbenchJob.update({ where: { id: input.jobId }, data: { status: "QUEUED", leaseToken: null, leaseExpiresAt: null, startedAt: null } });
     const claim = await runWorkerAction(db, { action: "claim", workerId: "legacy-helper" });

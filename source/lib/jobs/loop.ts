@@ -2,10 +2,12 @@ import { hostname } from "os";
 import type { PrismaClient } from "@prisma/client";
 import { recoverStaleCrawls } from "@/lib/crawler/lifecycle";
 import { APP_VERSION } from "@/lib/version";
+import { decisionFingerprint } from "@/lib/managed/policy";
 import { jobTypes } from "./handlers";
 import { claimJobs, recoverStaleJobs } from "./queue";
 import { HEARTBEAT_EVERY_MS, type JobRunner } from "./runner";
 import type { JobClass } from "./types";
+import { reportHostedJobPolicies } from "./hosted-receipts";
 
 /*
  * The polling loop of a process that runs jobs (inline mode in the app, or
@@ -39,6 +41,7 @@ export class JobLoop {
   private ticking: Promise<number> | null = null;
   private again = false;
   private stopping = false;
+  private hostedReceipt: Promise<void> | null = null;
 
   constructor(
     private readonly db: PrismaClient,
@@ -145,6 +148,7 @@ export class JobLoop {
 
   private async writeHeartbeatRow(now: Date = new Date()) {
     const id = this.runner.workerId;
+    const managedPolicy = decisionFingerprint();
     await this.db.workerHeartbeat.upsert({
       where: { id },
       create: {
@@ -154,9 +158,15 @@ export class JobLoop {
         version: APP_VERSION,
         startedAt: this.startedAt,
         lastSeenAt: now,
+        managedPolicy,
       },
-      update: { lastSeenAt: now },
+      update: { lastSeenAt: now, managedPolicy },
     });
+    if (!this.hostedReceipt) {
+      this.hostedReceipt = reportHostedJobPolicies(this.db).catch(() => {
+        this.log("hosted policy receipt unavailable");
+      }).finally(() => { this.hostedReceipt = null; });
+    }
   }
 
   /** Runs every due job, and the ones they queue, until none is left (tests and one-off runs). */
@@ -183,6 +193,7 @@ export class JobLoop {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
     await this.ticking?.catch(() => 0);
+    await this.hostedReceipt;
   }
 
   /**

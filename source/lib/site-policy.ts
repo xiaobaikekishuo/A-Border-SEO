@@ -1,6 +1,6 @@
 /*
  * The rules for adding and removing sites. The default policy allows
- * every site a user can see in Search Console and does nothing after a site
+ * public sites with or without a Search Console property and does nothing after a site
  * is added or deleted. A deployment that limits sites, or keeps something in
  * step with them, registers its own policy with setSitePolicy (from
  * extensions/index.ts) instead of editing the site routes.
@@ -50,7 +50,7 @@ export function setSitePolicy(policy: SitePolicy | null): void {
 
 export async function canAddSite(
   user: { id: string },
-  site: { domain: string; gscProperty: string }
+  site: { domain: string; gscProperty: string | null }
 ): Promise<SitePermission> {
   const canAdd = holder.aborderSitePolicy?.canAdd;
   return canAdd ? canAdd(user, site) : { ok: true };

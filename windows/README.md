@@ -5,7 +5,7 @@
 ## 需要准备
 
 - Docker Desktop（使用 Linux 容器）
-- PowerShell 7（`winget install --id Microsoft.PowerShell`；装了 Codex 桌面版的电脑通常已自带）
+- PowerShell 7.3 或更新版本（`winget install --id Microsoft.PowerShell`）
 - 可选：Codex 桌面版，用于账号模式和本机内容 worker
 - 一个 Google OAuth 客户端（Web 应用类型），回调地址 `http://localhost:3300/api/auth/callback/google`
 
@@ -79,3 +79,12 @@
 - 数据库端口不对外发布，应用只绑定 `127.0.0.1`。
 - 升级数据库结构前总会先备份；失败时数据不会被删除。
 - 迁移旧数据只读挂载旧数据卷，复制出副本后在隔离环境里导出，旧目录和旧数据卷都不会被修改。
+
+## 桌面程序的服务管理
+
+桌面安装包使用 `scripts/desktop.ps1` 管理本机 Docker Desktop 的 Linux x64 引擎和 Compose 项目。操作只作用于选定项目和数据目录。旧版 Windows 套件仍可通过本页的 `.cmd` 启动器使用。
+
+- 在桌面控制台选择旧套件目录时，程序检查原 `.env`、Compose 项目、数据卷和 `localhost:3300` 绑定。接管后沿用原数据目录、镜像和数据库卷。旧镜像的登录使用系统浏览器，升级到支持桌面登录的版本后可在应用窗口使用工作台。
+- 全新安装在控制台填写 Google Web OAuth 凭据。回调 URI 为 `http://localhost:3300/api/auth/callback/google`。桌面程序会为新安装生成应用密钥、数据库密码和本机内容 worker 令牌。
+- 桌面控制台可查看服务状态、备份位置和脱敏诊断。更新前保存工作。控制台提示后台任务仍在运行时，待任务结束后重试。
+- 用控制台的 Codex 登录功能授权此安装的专用 ChatGPT 账户。本机内容 worker 的账户文件位于所选数据目录下的 `codex\chatgpt`。配置或密钥从其他 Windows 用户环境复制后，按需要重新授权。

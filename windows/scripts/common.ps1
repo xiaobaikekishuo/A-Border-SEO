@@ -1,11 +1,17 @@
 #requires -Version 7.3
+param([string]$DataRoot = '', [string]$DockerContext = '', [string]$Project = '')
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
-$script:SeoRoot = Split-Path -Parent $PSScriptRoot
+$script:SeoToolRoot = Split-Path -Parent $PSScriptRoot
+$script:SeoRoot = if ($DataRoot) { [IO.Path]::GetFullPath($DataRoot) } else { $script:SeoToolRoot }
 $script:SeoEnvPath = Join-Path $script:SeoRoot '.env'
 # Docker Desktop's Linux engine. ABORDER_DOCKER_CONTEXT selects another context (for example "default").
-$script:SeoDockerContext = if ($env:ABORDER_DOCKER_CONTEXT -match '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$') { $env:ABORDER_DOCKER_CONTEXT } else { 'desktop-linux' }
-$script:SeoCompose = @('--context',$script:SeoDockerContext,'compose','--project-directory',$script:SeoRoot,'--env-file',$script:SeoEnvPath,'-f',(Join-Path $script:SeoRoot 'compose.local.yml'))
+if ($DockerContext -and $DockerContext -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$') { throw 'Docker context name is invalid.' }
+$script:SeoDockerContext = if ($DockerContext) { $DockerContext } elseif ($env:ABORDER_DOCKER_CONTEXT -match '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$') { $env:ABORDER_DOCKER_CONTEXT } else { 'desktop-linux' }
+if ($Project -and $Project -cnotmatch '^[a-z0-9][a-z0-9_-]{0,63}$') { throw 'Compose project name is invalid.' }
+$script:SeoCompose = @('--context',$script:SeoDockerContext,'compose','--project-directory',$script:SeoRoot,'--env-file',$script:SeoEnvPath,'-f',(Join-Path $script:SeoToolRoot 'compose.local.yml'))
+if ($Project) { $script:SeoCompose += @('--project-name', $Project) }
+if ($DataRoot) { $env:ABORDER_ENV_FILE = $script:SeoEnvPath }
 
 function ConvertFrom-SeoEnvText([string]$Raw) {
     $value = $Raw.Trim()
@@ -51,7 +57,7 @@ function Get-SeoDatabase {
     return [pscustomobject]@{ User = $user; Name = $name; Volume = $volume }
 }
 function Get-SeoImageName {
-    $image = Get-SeoEnvValue 'ABORDER_SEO_IMAGE' 'a-border-seo:1.1.2'
+    $image = Get-SeoEnvValue 'ABORDER_SEO_IMAGE' 'a-border-seo:1.5.6'
     if ($image -notmatch '^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$') { throw '.env 中的 ABORDER_SEO_IMAGE 不是有效的镜像名。' }
     return $image
 }
@@ -88,7 +94,8 @@ function Initialize-SeoToolPath {
             if (Test-Path -LiteralPath (Join-Path $dir 'docker.exe') -PathType Leaf) { Add-SeoPathEntry $dir; break }
         }
     }
-    $codex = Find-SeoCodexExecutable
+    try { $codex = Find-SeoCodexExecutable }
+    catch { if (-not $DataRoot) { throw }; $codex = $null }
     if ($codex) { Add-SeoPathEntry (Split-Path -Parent $codex) }
 }
 Initialize-SeoToolPath
@@ -155,6 +162,15 @@ function Write-SeoPrivateText([string]$Path, [string]$Text) {
     Set-SeoPrivateAcl $Path
     [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
 }
+function Write-SeoPrivateTextAtomic([string]$Path, [string]$Text) {
+    $temporary = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
+    try {
+        Write-SeoPrivateText $temporary $Text
+        [IO.File]::Move($temporary, $Path, $true)
+    } finally {
+        [IO.File]::Delete($temporary)
+    }
+}
 function New-SeoRandomHex([int]$Bytes = 32) {
     $buffer = [byte[]]::new($Bytes)
     $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
@@ -171,7 +187,7 @@ function New-SeoRandomToken {
 function Initialize-SeoEnvFile {
     # First run: .env from .env.example with a random database password and application secret.
     if (Test-Path -LiteralPath $script:SeoEnvPath) { return $false }
-    $text = [IO.File]::ReadAllText((Join-Path $script:SeoRoot '.env.example'))
+    $text = [IO.File]::ReadAllText((Join-Path $script:SeoToolRoot '.env.example'))
     $text = $text.Replace('REPLACE_WITH_RANDOM_DB_PASSWORD', (New-SeoRandomHex 24)).Replace('REPLACE_WITH_RANDOM_AUTH_SECRET', (New-SeoRandomHex 32))
     Write-SeoPrivateText $script:SeoEnvPath $text
     return $true
@@ -187,10 +203,10 @@ function Read-SeoSecret([string]$Label) {
     } finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr); $secure.Dispose() }
 }
 function Set-SeoEnvValue([string]$Name,[string]$Value,[switch]$AddIfMissing) {
-    if ($Name -notmatch '^[A-Z][A-Z0-9_]*$' -or $Value -notmatch '^[A-Za-z0-9_.:/-]+$') { throw '配置值包含意外字符，未写入。' }
+    if ($Name -notmatch '^[A-Z][A-Z0-9_]*$' -or $Value -notmatch '^[A-Za-z0-9_.:/@-]+$') { throw '配置值包含意外字符，未写入。' }
     $path = $script:SeoEnvPath
     $text = [IO.File]::ReadAllText($path)
-    $pattern = '(?m)^' + [regex]::Escape($Name) + '=[^\r\n]*'
+    $pattern = '(?m)^[ \t]*' + [regex]::Escape($Name) + '[ \t]*=[^\r\n]*'
     if ([regex]::IsMatch($text,$pattern)) {
         $text = [regex]::Replace($text,$pattern,[Text.RegularExpressions.MatchEvaluator]{ param($m) "$Name=$Value" })
     } elseif ($AddIfMissing) {
@@ -198,7 +214,7 @@ function Set-SeoEnvValue([string]$Name,[string]$Value,[switch]$AddIfMissing) {
         if ($text.Length -gt 0 -and -not $text.EndsWith("`n")) { $text += $newline }
         $text += "$Name=$Value$newline"
     } else { throw "Missing configuration field: $Name" }
-    Write-SeoPrivateText $path $text
+    Write-SeoPrivateTextAtomic $path $text
 }
 function Assert-SeoGoogleReady {
     Assert-SeoEnvFile
@@ -248,11 +264,12 @@ function Get-SeoMigrationState {
     if ($LASTEXITCODE -ne 0) { throw '无法读取镜像里的数据库结构升级脚本。' }
     $available = @($listed | ForEach-Object { "$_".Trim() } | Where-Object { $_ -match '^\d{14}_[A-Za-z0-9_]+$' })
     if (-not $available.Count) { throw '镜像里没有数据库结构升级脚本，镜像可能不完整。' }
-    return [pscustomobject]@{ HasData = ($hasTable -eq 't'); Pending = @($available | Where-Object { $_ -notin $applied }) }
+    return [pscustomobject]@{ HasData = ($hasTable -eq 't'); Pending = @($available | Where-Object { $_ -notin $applied }); Ahead = @($applied | Where-Object { $_ -notin $available }) }
 }
 function Update-SeoDatabaseSchema([switch]$SkipBackup) {
     # Applies the image's pending schema migrations. An existing database is backed up first.
     $state = Get-SeoMigrationState
+    if ($state.Ahead.Count) { throw '数据库结构比当前镜像新。请恢复匹配的镜像版本或按备份恢复说明操作。' }
     if (-not $state.Pending.Count) { return }
     if ($state.HasData -and -not $SkipBackup) {
         Write-Host "数据库结构需要升级（$($state.Pending.Count) 项），先自动备份。"

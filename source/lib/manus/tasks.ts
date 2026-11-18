@@ -4,6 +4,8 @@ import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { ContentError } from "@/lib/content-planner/http";
 import { decrypt } from "@/lib/encryption";
+import { desktopMaintenanceActive } from "@/lib/desktop/maintenance";
+import { managedAllows } from "@/lib/managed/policy";
 import { createResearch, readResearch, normalizeResearchInput, ManusError, type ManusResearchInput } from "./client";
 
 export type ManusTaskStatus = "submitting" | "unknown" | "pending" | "running" | "waiting" | "completed" | "failed";
@@ -96,6 +98,7 @@ export async function submitTask(owner: Owner, raw: unknown): Promise<ManusKeywo
   if ([...input.seeds, input.audience, input.language].some(value => value.includes(key))) {
     throw new ContentError("invalid_input");
   }
+  if (desktopMaintenanceActive() || !managedAllows("manus")) throw new ContentError("workspace_maintenance", 503);
   const id = randomUUID();
   // A durable reservation precedes the only paid call. ON CONFLICT DO NOTHING
   // makes concurrent browser submissions replay the winner's local receipt.
@@ -103,6 +106,13 @@ export async function submitTask(owner: Owner, raw: unknown): Promise<ManusKeywo
     data: { id, ...receipt, input: { ...input }, status: "submitting" }, skipDuplicates: true,
   });
   if (!claim.count) return replay(await db.manusKeywordTask.findUniqueOrThrow({ where }));
+  if (!managedAllows("manus")) {
+    // No provider call was made. Preserve the request receipt without permitting replay.
+    return publicTask(await db.manusKeywordTask.update({
+      where: { id, ...owner },
+      data: { status: "failed", errorCode: "workspace_maintenance" },
+    }));
+  }
   let remote;
   try {
     remote = await createResearch(key, input);

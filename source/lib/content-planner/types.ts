@@ -33,6 +33,7 @@ export type ContentPillar = {
   searchVolume: null; performance: ContentMetrics | null; clusters: ContentCluster[];
 };
 export type ContentPlanJob = {
+  keywordSelection?: import("./keyword-selection").KeywordSelection;
   topicCount?: number; funnelCounts?: FunnelCounts;
   kind?: string; reviewResult?: ArticleReview | null; reviewPages?: { pageId: string; title: string; url: string; source: string }[];
   id: string; pillarId: string; status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";

@@ -1,5 +1,6 @@
 import { bearerKey, findKeyOwner, touchKey, type KeyOwner } from "@/lib/access-keys";
 import { db } from "@/lib/db";
+import { managedOwnsLocalUser } from "@/lib/desktop/managed-session";
 
 /*
  * The gate in front of /api/v1 and /mcp: an access key that exists, of a user
@@ -16,6 +17,9 @@ export async function checkKey(req: Request): Promise<KeyCheck> {
   const owner = await findKeyOwner(db, key);
   if (!owner) {
     return { ok: false, status: 401, error: "Invalid API key", headers: { "WWW-Authenticate": 'Bearer error="invalid_token"' } };
+  }
+  if (!await managedOwnsLocalUser(db, owner.userId)) {
+    return { ok: false, status: 403, error: "This key does not belong to the signed-in desktop account.", headers: {} };
   }
   if (!owner.mcpEnabled) return { ok: false, status: 403, error: MCP_OFF_MESSAGE, headers: {} };
   await touchKey(db, owner);

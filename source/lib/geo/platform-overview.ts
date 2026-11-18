@@ -1,10 +1,12 @@
 import type { PrismaClient } from "@prisma/client";
 import { ContentError } from "@/lib/content-planner/http";
+import { getGscDateRange } from "@/lib/date-utils";
 import { summarizeEligibility, type DirectivePage, type EligibilitySummary } from "./directives";
 import type { ProbeReport } from "./probe";
 import { worstVerdict, type ProbeVerdict } from "./probe-rules";
 import { GEO_PLATFORMS, type CrawlerRole, type EligibilityRules, type GeoPlatform, type GeoPlatformId } from "./platforms";
 import { loadAiReports, type AiReports } from "./report-store";
+import { reportTotal } from "./reports";
 import { latestAnswers, settingsOf, storedBrands, summarizeByPlatform } from "./tracking";
 import type { GeoSnapshot } from "./types";
 import type { PlatformVisibility } from "./visibility-rules";
@@ -34,8 +36,9 @@ export type PlatformStatus = {
   id: GeoPlatformId;
   access: { state: LayerState; tokens: AccessToken[] };
   eligibility: { state: LayerState; rules: EligibilityRules; summary: EligibilitySummary | null };
-  index: { state: LayerState; kind: "GOOGLE" | "BING" | null; pages: number | null; at: string | null };
-  report: { state: LayerState; kind: "GSC_AI" | "BING_AI" | null; total: number | null; start: string | null; end: string | null };
+  index: { state: LayerState; kind: "GOOGLE" | "BING" | null; pages: number | null; at: string | null;
+    connected?: boolean; coverage?: { start: string; end: string; days: number; expected: number }; stale?: boolean };
+  report: { state: LayerState; kind: "GSC_AI" | "BING_AI" | null; imported: boolean; total: number | null; start: string | null; end: string | null };
   answers: { state: LayerState; source: "DATAFORSEO" | "MANUAL"; tracked: boolean; visibility: PlatformVisibility | null };
   traffic: { state: LayerState; referrals: number | null; crawlerRequests: number | null };
 };
@@ -50,8 +53,8 @@ export type PlatformOverview = {
 export type OverviewInput = {
   probe: ProbeReport | null;
   eligibility: Record<EligibilityRules, EligibilitySummary> | null;
-  google: { connected: boolean; pages: number; date: string | null };
-  bing: { connected: boolean; inIndex: number | null; date: string | null };
+  google: { connected: boolean; pages: number; coverage: { start: string; end: string; days: number; expected: number } };
+  bing: { connected: boolean; inIndex: number | null; date: string | null; stale: boolean };
   reports: AiReports;
   visibility: Partial<Record<GeoPlatformId, PlatformVisibility>>;
   tracked: readonly GeoPlatformId[];
@@ -98,24 +101,27 @@ function eligibilityLayer(platform: GeoPlatform, eligibility: OverviewInput["eli
 
 function indexLayer(platform: GeoPlatform, input: OverviewInput): PlatformStatus["index"] {
   if (platform.index === "GOOGLE") {
-    if (!input.google.connected) return { state: "UNKNOWN", kind: "GOOGLE", pages: null, at: null };
-    return { state: input.google.pages > 0 ? "GOOD" : "WARN", kind: "GOOGLE", pages: input.google.pages, at: input.google.date };
+    const { coverage, connected } = input.google;
+    const pages = connected && coverage.days > 0 && (coverage.days === coverage.expected || input.google.pages > 0)
+      ? input.google.pages : null;
+    return { state: pages === null ? "UNKNOWN" : coverage.days < coverage.expected || !pages ? "WARN" : "GOOD",
+      kind: "GOOGLE", connected, coverage, pages, at: coverage.end };
   }
   if (platform.index === "BING") {
-    if (!input.bing.connected || input.bing.inIndex === null) return { state: "UNKNOWN", kind: "BING", pages: input.bing.inIndex, at: input.bing.date };
-    return { state: input.bing.inIndex > 0 ? "GOOD" : "WARN", kind: "BING", pages: input.bing.inIndex, at: input.bing.date };
+    const { connected, inIndex, date, stale } = input.bing;
+    const pages = connected ? inIndex : null;
+    return { state: pages === null ? "UNKNOWN" : stale || !pages ? "WARN" : "GOOD", kind: "BING",
+      connected, pages, at: connected ? date : null, stale: connected && stale };
   }
   return { state: "NA", kind: null, pages: null, at: null };
 }
 
 function reportLayer(platform: GeoPlatform, reports: AiReports): PlatformStatus["report"] {
-  if (!platform.report) return { state: "NA", kind: null, total: null, start: null, end: null };
+  if (!platform.report) return { state: "NA", kind: null, imported: false, total: null, start: null, end: null };
   const report = reports[platform.report];
-  if (!report) return { state: "UNKNOWN", kind: platform.report, total: null, start: null, end: null };
-  const total = report.daily.length
-    ? report.daily.reduce((sum, d) => sum + d.value, 0)
-    : report.pages.reduce((sum, p) => sum + p.value, 0);
-  return { state: total > 0 ? "GOOD" : "WARN", kind: platform.report, total, start: report.start, end: report.end };
+  if (!report) return { state: "UNKNOWN", kind: platform.report, imported: false, total: null, start: null, end: null };
+  const total = reportTotal(report);
+  return { state: total === null ? "UNKNOWN" : total > 0 ? "GOOD" : "WARN", kind: platform.report, imported: true, total, start: report.start, end: report.end };
 }
 
 function answersLayer(platform: GeoPlatform, input: OverviewInput): PlatformStatus["answers"] {
@@ -170,18 +176,33 @@ function directivePage(row: { url: string; statusCode: number; robotsMeta: strin
   };
 }
 
+export const overviewSiteFields = { id: true, domain: true, gscProperty: true, bingSite: true } as const;
+type OverviewSite = { id: string; domain: string; gscProperty: string | null; bingSite: string | null };
+
 export async function readPlatformOverview(db: PrismaClient, userId: string | undefined, siteId: string, now = new Date()): Promise<PlatformOverview> {
   if (!userId) throw new ContentError("Unauthorized", 401);
-  const site = await db.site.findFirst({ where: { id: siteId, userId }, select: { id: true, domain: true, gscProperty: true, bingSite: true } }) as
-    { id: string; domain: string; gscProperty: string | null; bingSite: string | null } | null;
+  const site = await db.site.findFirst({ where: { id: siteId, userId }, select: overviewSiteFields });
   if (!site) throw new ContentError("Unknown site", 404);
-  const since = new Date(now.getTime() - 28 * 86_400_000);
+  return buildSiteOverview(db, site, now);
+}
+
+/** Called after an owner-scoped Site lookup, from the page or the refresh API. */
+export async function buildSiteOverview(db: PrismaClient, site: OverviewSite, now = new Date()): Promise<PlatformOverview> {
+  const siteId = site.id;
+  const windowDays = 28;
+  const window = getGscDateRange(windowDays, now);
   const [snapshots, reports, crawl, googleRows, bingDay, tracking, latest] = await Promise.all([
     db.geoSnapshot.findMany({ where: { siteId, kind: { in: ["PROBE", "GA4", "BOT"] } } }) as Promise<{ kind: string; report: unknown; updatedAt: Date }[]>,
     loadAiReports(db, siteId),
     db.crawl.findFirst({ where: { siteId, status: "COMPLETED" }, orderBy: { finishedAt: "desc" }, select: { id: true, finishedAt: true } }) as Promise<{ id: string; finishedAt: Date | null } | null>,
-    db.$queryRaw`SELECT COUNT(DISTINCT "url")::int AS n FROM "Page" WHERE "siteId" = ${siteId} AND "date" >= ${since} AND "impressions" > 0` as Promise<{ n: number }[]>,
-    db.bingDaily.findFirst({ where: { siteId, inIndex: { not: null } }, orderBy: { date: "desc" }, select: { date: true, inIndex: true } }) as Promise<{ date: Date; inIndex: number | null } | null>,
+    site.gscProperty ? db.$queryRaw<{ n: number; days: number }[]>`
+      SELECT COUNT(DISTINCT p."url")::int AS n, COUNT(DISTINCT c."date")::int AS days
+      FROM "GscSyncCoverage" c LEFT JOIN "Page" p
+        ON p."siteId" = c."siteId" AND p."date" = c."date" AND p."impressions" > 0
+      WHERE c."siteId" = ${siteId} AND c."gscProperty" = ${site.gscProperty} AND c."pagesComplete"
+        AND (NOT c."propertyChecked" OR c."propertyImpressions" IS NOT NULL)
+        AND c."date" BETWEEN ${window.start}::date AND ${window.end}::date` : [],
+    site.bingSite ? db.bingDaily.findFirst({ where: { siteId, inIndex: { not: null } }, orderBy: { date: "desc" }, select: { date: true, inIndex: true } }) : null,
     db.geoTracking.findUnique({ where: { siteId }, select: { brands: true, platforms: true, scheduleDays: true, budgetUsd: true } }),
     latestAnswers(db, siteId, now),
   ]);
@@ -204,8 +225,9 @@ export async function readPlatformOverview(db: PrismaClient, userId: string | un
   const platforms = buildPlatformStatuses({
     probe,
     eligibility,
-    google: { connected: !!site.gscProperty, pages: googlePages, date: googlePages ? since.toISOString().slice(0, 10) : null },
-    bing: { connected: !!site.bingSite, inIndex: bingDay?.inIndex ?? null, date: bingDay?.date.toISOString().slice(0, 10) ?? null },
+    google: { connected: !!site.gscProperty, pages: googlePages, coverage: { ...window, days: googleRows[0]?.days ?? 0, expected: windowDays } },
+    bing: { connected: !!site.bingSite, inIndex: bingDay?.inIndex ?? null, date: bingDay?.date.toISOString().slice(0, 10) ?? null,
+      stale: !!bingDay && Date.parse(now.toISOString().slice(0, 10)) - bingDay.date.getTime() > 28 * 86_400_000 },
     reports,
     visibility: summarizeByPlatform(latest.records, brands),
     tracked: settings?.platforms ?? [],

@@ -11,7 +11,7 @@ import type { ProbeVerdict } from "@/lib/geo/probe-rules";
 import { geoErrorMessage } from "./geo-errors";
 import { onGeoUpdate } from "./geo-events";
 
-type Props = { siteId: string };
+type Props = { siteId: string; initialData: PlatformOverview | null };
 
 const DOT: Record<LayerState, string> = {
   GOOD: "bg-success",
@@ -89,25 +89,33 @@ function accessText(layer: PlatformStatus["access"], t: Translator): string {
 function eligibilityText(layer: PlatformStatus["eligibility"], t: Translator): string {
   const s = layer.summary;
   if (!s || !s.pages) return t("Crawl the site", "先抓取网站");
-  const parts = [t("{ok}/{pages} usable", "{ok}/{pages} 页可用", { ok: number(s.ok), pages: number(s.pages) })];
+  const parts = [t("No restriction found on {ok}/{pages} sampled pages", "样本中 {ok}/{pages} 页未发现指令限制", { ok: number(s.ok), pages: number(s.pages) })];
   if (s.excluded) parts.push(t("{n} excluded", "{n} 页被排除", { n: number(s.excluded) }));
   if (s.limited) parts.push(t("{n} limited", "{n} 页受限", { n: number(s.limited) }));
   return parts.join(" · ");
 }
 
 function indexText(layer: PlatformStatus["index"], t: Translator): string {
-  if (layer.kind === null) return t("No public index data", "无公开的索引数据");
+  if (layer.kind === null) return t("No search data source", "无搜索数据来源");
   if (layer.kind === "GOOGLE") {
-    return layer.pages === null ? t("Connect Search Console", "连接 Search Console")
-      : t("{n} pages with impressions (28 days)", "{n} 页有展示（近 28 天）", { n: number(layer.pages) });
+    if (layer.connected === false) return t("Connect Search Console", "连接 Search Console");
+    const c = layer.coverage;
+    if (!c) return t("GSC sync coverage unknown", "GSC 同步覆盖未知");
+    const period = t("{start} to {end}; coverage {days}/{expected} days", "{start} 至 {end}；覆盖 {days}/{expected} 天", c);
+    if (layer.pages === null) return t("GSC: page count unknown", "GSC：展示页数未知") + " · " + period;
+    const prefix = c.days === c.expected ? t("GSC reported impressions for {n} pages", "GSC 页面明细中 {n} 页有展示", { n: number(layer.pages) })
+      : t("GSC reported impressions for at least {n} pages", "GSC 页面明细中至少 {n} 页有展示", { n: number(layer.pages) });
+    return prefix + " · " + period;
   }
-  return layer.pages === null ? t("Connect Bing Webmaster Tools", "连接 Bing 网站管理员工具")
-    : t("{n} pages in the Bing index", "Bing 索引 {n} 页", { n: number(layer.pages) });
+  if (layer.connected === false) return t("Connect Bing Webmaster Tools", "连接 Bing 网站管理员工具");
+  if (layer.pages === null || !layer.at) return t("Bing: no index snapshot yet", "Bing：尚无索引快照");
+  const snapshot = t("Bing index: {n} pages on {date}", "Bing 索引：{n} 页（{date}）", { n: number(layer.pages), date: layer.at });
+  return layer.stale ? snapshot + " · " + t("Over 28 days old", "快照已超过 28 天") : snapshot;
 }
 
 function reportText(layer: PlatformStatus["report"], t: Translator): string {
   if (!layer.kind) return t("The platform has no site report", "平台未提供站点报表");
-  if (layer.total === null) return t("Import the report", "导入报表");
+  if (layer.total === null) return layer.imported ? t("Total not provided", "未提供总计") : t("Import the report", "导入报表");
   const period = layer.start && layer.end ? ` · ${layer.start} – ${layer.end}` : "";
   return (layer.kind === "GSC_AI"
     ? t("{n} impressions", "{n} 次展示", { n: number(layer.total) })
@@ -118,8 +126,9 @@ function answersText(layer: PlatformStatus["answers"], t: Translator): string {
   const v = layer.visibility;
   if (!v || !v.answers) {
     if (v?.failed) return t("{n} attempts failed; see prompt tracking", "{n} 次查询失败，见提示词跟踪", { n: v.failed });
-    if (layer.source === "MANUAL") return t("Record answers by hand", "手动记录回答");
-    return layer.tracked ? t("No answers yet", "尚无回答") : t("Not tracked", "未跟踪");
+    if (v?.noAnswer) return t("{n} prompts returned no AI answer; citation rate unknown", "{n} 个提示词未返回 AI 回答，引用率未知", { n: v.noAnswer });
+    if (layer.source === "MANUAL") return t("Unmeasured; record an answer", "尚未测量，可手动记录回答");
+    return layer.tracked ? t("No answer samples yet", "尚无回答样本") : t("Not tracked; citations unknown", "未跟踪，引用情况未知");
   }
   return t("Mentioned {m} · cited {c} ({n} answers)", "提及 {m} · 引用 {c}（{n} 个回答）", { m: percent(v.mentionRate), c: percent(v.citationRate), n: v.answers });
 }
@@ -187,11 +196,12 @@ function Details({ status, t, locale }: { status: PlatformStatus; t: Translator;
   </div>;
 }
 
-export default function GeoPlatforms({ siteId }: Props) {
+export default function GeoPlatforms({ siteId, initialData }: Props) {
   const { t, locale } = useI18n();
-  const [data, setData] = useState<PlatformOverview | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState<"load" | "probe" | null>("load");
+  const [freshData, setData] = useState<PlatformOverview | null>(null);
+  const data = freshData ?? initialData;
+  const [error, setError] = useState(initialData ? "" : t("Could not load the platform overview. Refresh to retry.", "无法加载平台概览，请点击刷新重试。"));
+  const [busy, setBusy] = useState<"load" | "probe" | null>(null);
   const [open, setOpen] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -209,7 +219,6 @@ export default function GeoPlatforms({ siteId }: Props) {
     }
   }, [siteId, t]);
 
-  useEffect(() => { void load(); }, [load]);
   useEffect(() => onGeoUpdate(() => void load()), [load]);
 
   async function probe() {
@@ -231,7 +240,7 @@ export default function GeoPlatforms({ siteId }: Props) {
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h2 className="font-semibold">{t("AI platforms", "各 AI 平台 GEO 情况")}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{t("Each platform on six layers: can its crawlers reach the site, do page directives let it use the pages, is the site in the index it answers from, the platform's own AI report, how often its answers name or cite the site, and the visits and crawler requests it brings.", "按六层查看每个平台：爬虫能否访问、页面指令是否允许使用、网站是否在其依赖的索引中、平台自己的 AI 报表、回答中提及或引用网站的比例，以及带来的访问和爬虫请求。")}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{t("Page directives come from a crawl sample. Google search impressions and Bing index snapshots are shared search signals. For AI citations, check a platform report that measures citations or review the sampled answers to your prompts.", "页面指令来自抓取样本。Google 搜索展示和 Bing 索引是多行共用的搜索数据，不代表 AI 收录或引用。要看引用，请查看包含引用指标的平台报表，或所跟踪提示词的回答样本。")}</p>
       </div>
       <div className="flex gap-2">
         <button type="button" className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50" onClick={() => void load()} disabled={busy !== null}>
@@ -256,9 +265,9 @@ export default function GeoPlatforms({ siteId }: Props) {
             <th className="px-3 py-2 font-medium">{t("Platform", "平台")}</th>
             <th className="px-3 py-2 font-medium">{t("Access", "访问")}</th>
             <th className="px-3 py-2 font-medium">{t("Page directives", "页面指令")}</th>
-            <th className="px-3 py-2 font-medium">{t("Index", "索引")}</th>
+            <th className="px-3 py-2 font-medium">{t("Search evidence (shared)", "搜索数据（共享）")}</th>
             <th className="px-3 py-2 font-medium">{t("AI report", "AI 报表")}</th>
-            <th className="px-3 py-2 font-medium">{t("Answers", "回答")}</th>
+            <th className="px-3 py-2 font-medium">{t("Sampled answers", "回答样本")}</th>
             <th className="px-3 py-2 font-medium">{t("Traffic", "流量")}</th>
           </tr></thead>
           <tbody>{data.platforms.map(status => {

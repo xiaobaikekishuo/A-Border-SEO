@@ -1,6 +1,6 @@
 # A-Border SEO: the web app and the background worker in one image.
 #
-#   docker build -t a-border-seo:1.1.2 .
+#   docker build -t a-border-seo:1.5.6 .
 #
 # The web app listens on port 3000 ("node server.js", the default command);
 # "node worker.cjs" runs the background worker from the same image. The image
@@ -36,6 +36,7 @@ RUN --network=none ./node_modules/.bin/esbuild scripts/review-crawl.ts --bundle 
 RUN --network=none node scripts/stage-prisma-cli.mjs /build/prisma-cli
 
 FROM base AS runner
+LABEL com.aborder-seo.managed-policy="1"
 WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs

@@ -1,5 +1,8 @@
 #requires -Version 7.0
 . (Join-Path $PSScriptRoot 'common.ps1')
+if (Test-Path -LiteralPath (Join-Path $script:SeoRoot 'private\managed') -PathType Container) {
+    throw '此安装已接入设备管理。请使用 A-Border SEO 桌面控制台启动，以加载授权策略。'
+}
 Assert-SeoGoogleReady
 Assert-SeoDocker
 Assert-SeoImage

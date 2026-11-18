@@ -1,0 +1,4 @@
+{$ABORDER_CONTROL_HOST} {
+  encode zstd gzip
+  reverse_proxy control:8080
+}

@@ -1,9 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 vi.mock("./google-auth", () => ({ getAccessToken: async () => "test-only-token" }));
-import { fetchPageAnalytics, fetchSearchAnalytics } from "./gsc-client";
+import { fetchPageAnalytics, fetchPropertyAnalytics, fetchSearchAnalytics } from "./gsc-client";
 afterEach(() => vi.unstubAllGlobals());
 const row = (keys: string[]) => ({ keys, clicks: 1, impressions: 10, ctr: 0.1, position: 3 });
 describe("GSC API dimensions and pagination", () => {
+  it("requests final web property totals without page or query dimensions and preserves missing dates", async () => {
+    const fetcher = vi.fn().mockResolvedValueOnce(Response.json({ responseAggregationType: "byProperty", rows: [row(["2026-10-02"])] }));
+    vi.stubGlobal("fetch", fetcher);
+    expect(await fetchPropertyAnalytics("u", "sc-domain:example.test", "2026-10-01", "2026-10-02"))
+      .toEqual([{ date: "2026-10-02", clicks: 1, impressions: 10, position: 3 }]);
+    expect(JSON.parse(fetcher.mock.calls[0][1].body)).toMatchObject({ dimensions: ["date"], aggregationType: "byProperty", type: "web", dataState: "final" });
+  });
+  it("rejects page-level data when property totals were requested", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(Response.json({ responseAggregationType: "byPage", rows: [row(["2026-10-02"])] })));
+    await expect(fetchPropertyAnalytics("u", "sc-domain:example.test", "2026-10-01", "2026-10-02")).rejects.toThrow("aggregation");
+  });
   it("maps dimensions by name and preserves the page dimension when requested", async () => {
     const fetcher = vi.fn(async () => Response.json({ rows: [row(["term", "https://example.test/a", "2026-10-01"]), row(["term", "https://example.test/b", "2026-10-01"])] }));
     vi.stubGlobal("fetch", fetcher);

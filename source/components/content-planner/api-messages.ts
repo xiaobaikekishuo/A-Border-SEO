@@ -3,6 +3,7 @@ import type { Translator } from "@/lib/i18n/shared";
 // Translate only exact, application-owned errors. External errors and user data
 // remain intact; this does not change the API response or persisted records.
 const MESSAGES: Record<string, string> = {
+  "Shorten the pillar details or select fewer research keywords, then generate again.": "本次内容超过本机生成服务的单次容量。请缩短主题说明，或返回关键词研究分批选词后再生成。",
   "Funnel counts must add up to the requested topic count": "三个读者阶段的数量之和必须等于本次建议数量。",
   "Generated topics do not match this task's funnel distribution": "生成结果未符合本任务的读者阶段分配，未自动导入。请检查数量后再手动重试。",
   "Invalid saved funnel distribution": "已保存的读者阶段分配无效，请重新设置后创建任务。",
@@ -18,6 +19,7 @@ const MESSAGES: Record<string, string> = {
   "Unauthorized": "登录已失效，请重新登录。",
   "Not found": "未找到当前站点。",
   "Pillar not found": "未找到总览主题，请重新读取规划。",
+  "Reviewed keyword selection is unavailable": "当前站点的关键词建议已失效，请返回关键词研究重新选择。",
   "Topic not found": "未找到选题，请重新读取规划。",
   "Target pillar not found": "未找到目标主题，请重新选择。",
   "No completed crawl is available for this site": "当前站点还没有已完成的抓取，请先完成抓取。",

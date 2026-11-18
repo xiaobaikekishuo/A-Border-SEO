@@ -3,13 +3,14 @@ import { ContentError } from "@/lib/content-planner/http";
 import { siteUrl } from "@/lib/content-planner/schema";
 import { articleSearchEvidence } from "@/lib/content-planner/article-search-evidence";
 import type { WorkbenchRequest, WorkbenchResult } from "./schema";
+import { assertResearchProvider, fitResearchContext, sampleResearchRows, sampleResearchSearch } from "./research-context";
 
 export function assertKeywordRequest(input: WorkbenchRequest) {
   if (input.kind !== "KEYWORD_RESEARCH") {
     if (input.keywordResearch) throw new ContentError("Keyword settings are only supported for keyword research");
     return;
   }
-  if (input.provider !== "CHATGPT_APP") throw new ContentError("Keyword research requires a connected ChatGPT app account", 409);
+  assertResearchProvider(input.provider);
   if (!input.keywordResearch || !input.keyword.trim()) throw new ContentError("Provide a seed keyword, suggestion count and target market");
   if (input.body || input.pageId || input.clusterId || input.diagnosis) throw new ContentError("Keyword research uses only the seed and sampled site evidence");
 }
@@ -37,8 +38,13 @@ export async function buildKeywordContext(tx: Prisma.TransactionClient, site: { 
     evidenceLimits: { knownPages: 40, savedKeywords: 40, searchPages: 8, queriesPerPage: 10, sampleOnly: true },
     marketNote: "Target market guides suggestions only. Saved GSC evidence keeps its original scope and reporting period; it is not target-market search volume.",
   };
-  if (JSON.stringify(context).length > 140000) throw new ContentError("Keyword evidence is too large. Choose a more specific seed keyword.");
-  return context;
+  return fitResearchContext(input, context, keywordResearchPrompt, divisor => {
+    const knownPages = sampleResearchRows(context.knownPages, divisor);
+    const allowedInternalLinks = knownPages.map(page => page.url);
+    return { ...context, knownPages, allowedInternalLinks, savedKeywords: sampleResearchRows(context.savedKeywords, divisor),
+      searchEvidence: sampleResearchSearch(context.searchEvidence, new Set(allowedInternalLinks), divisor),
+      evidenceLimits: { ...context.evidenceLimits, reducedToFitWorker: true } };
+  });
 }
 
 export function keywordResearchPrompt(input: WorkbenchRequest, context: unknown) {

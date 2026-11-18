@@ -8,6 +8,7 @@ import { DashboardMetrics } from "@/components/dashboard/metrics";
 import { TrafficChart } from "@/components/dashboard/traffic-chart";
 import { TopKeywords } from "@/components/dashboard/top-keywords";
 import { PageHeader } from "@/components/ui/page-header";
+import { ReportAnalysisLink } from "@/components/ai-workbench/report-analysis-link";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SyncButton } from "@/components/sites/sync-button";
 import {
@@ -37,6 +38,7 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
       userId: true,
       domain: true,
       gscProperty: true,
+      gscSyncCoverage: { where: { propertyChecked: true }, distinct: ["gscProperty"], select: { gscProperty: true } },
       _count: { select: { keywords: true, pages: true } },
     },
   });
@@ -45,34 +47,21 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
     redirect("/sites");
   }
 
-  const latestCrawl = await db.crawl.findFirst({
-    where: { siteId, status: "COMPLETED" },
-    orderBy: { finishedAt: "desc" },
-    select: { id: true, healthScore: true, healthScoreVersion: true, finishedAt: true },
-  });
-  // Counted live with the Crawl / Audit page's rules, so both screens agree,
-  // also for crawls stored before issuesFound left out the internal rows.
-  const [latestIssueCount, latestPageCount, noindexWarning] = latestCrawl
-    ? await Promise.all([
-        countVisibleIssues(db, latestCrawl.id),
-        db.auditPage.count({ where: { crawlId: latestCrawl.id } }),
-        getNoindexWarning(db, latestCrawl.id),
-      ])
-    : [0, 0, null];
-  // A crawl in progress, or the failure of the last attempt since latestCrawl.
-  const crawlActivity = await getCrawlActivity(db, siteId, latestCrawl?.finishedAt ?? null);
-
-  const latestVital = await db.vitalsReport.findFirst({
-    where: { siteId },
-    orderBy: { date: "desc" },
-    select: { perfScore: true, lcp: true, url: true },
-  });
-
   // Search Console anonymises the query dimension on low-traffic sites, so a
   // synced site can have pages but no keywords. Either one means data arrived.
-  const hasData = site._count.keywords > 0 || site._count.pages > 0;
-
-  const opportunities = hasData ? await getAllOpportunities(siteId) : null;
+  const hasData = site._count.keywords > 0 || site._count.pages > 0 ||
+    site.gscSyncCoverage.some(row => row.gscProperty === site.gscProperty);
+  // Start independent reads only after the site's owner has been verified.
+  const [crawl, latestVital, opportunities] = await Promise.all([
+    getOverviewCrawl(siteId),
+    db.vitalsReport.findFirst({
+      where: { siteId },
+      orderBy: { date: "desc" },
+      select: { perfScore: true, lcp: true, url: true },
+    }),
+    hasData ? getAllOpportunities(siteId) : null,
+  ]);
+  const { latestCrawl, latestIssueCount, latestPageCount, noindexWarning, crawlActivity } = crawl;
 
   return (
     <div>
@@ -83,9 +72,14 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
         reserveStatus
         actions={
           <>
-            <SyncButton siteId={siteId} />
+            {site.gscProperty ? <SyncButton siteId={siteId} /> : (
+              <Link href={`/sites/${siteId}/settings#gsc-connection`} className="text-link text-sm font-medium">
+                {t("Connect Search Console", "连接 Search Console")}
+              </Link>
+            )}
             <CrawlButton siteId={siteId} pageCeiling={crawlPageCeiling()} />
             <VitalsButton siteId={siteId} />
+            <ReportAnalysisLink siteId={siteId} scope="weekly" t={t} />
           </>
         }
       />
@@ -99,8 +93,12 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
       {!hasData ? (
         <EmptyState
           illustration="empty-gsc-wait"
-          title={t("Waiting for GSC data", "等待 GSC 数据")}
-          description={t("Run a sync to pull keywords, pages, and traffic for the last 28 days.", "运行同步，获取最近 28 天的关键词、页面和流量数据。")}
+          title={site.gscProperty ? t("Waiting for GSC data", "等待 GSC 数据") : t("Your site is ready", "网站已添加")}
+          description={site.gscProperty
+            ? t("Run a sync to pull keywords, pages, and traffic for the last 28 days.", "运行同步，获取最近 28 天的关键词、页面和流量数据。")
+            : t("You can crawl this site and use the Codex workbench now. Connect Search Console in Site settings when you want Google search traffic and keyword data.", "现在可以抓取网站并使用 Codex 工作台。需要 Google 搜索流量和关键词数据时，可在站点设置中连接 Search Console。")}
+          actionLabel={!site.gscProperty ? t("Open Codex workbench", "打开 Codex 工作台") : undefined}
+          actionHref={!site.gscProperty ? `/sites/${siteId}/assistant` : undefined}
         />
       ) : (
         <div className="flex flex-col gap-[22px]">
@@ -174,6 +172,24 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
       )}
     </div>
   );
+}
+
+async function getOverviewCrawl(siteId: string) {
+  const latestCrawl = await db.crawl.findFirst({
+    where: { siteId, status: "COMPLETED" },
+    orderBy: { finishedAt: "desc" },
+    select: { id: true, healthScore: true, healthScoreVersion: true, finishedAt: true },
+  });
+  // Counted live with the Crawl / Audit page's rules, so both screens agree,
+  // also for crawls stored before issuesFound left out the internal rows.
+  const [latestIssueCount, latestPageCount, noindexWarning, crawlActivity] = await Promise.all([
+    latestCrawl ? countVisibleIssues(db, latestCrawl.id) : 0,
+    latestCrawl ? db.auditPage.count({ where: { crawlId: latestCrawl.id } }) : 0,
+    latestCrawl ? getNoindexWarning(db, latestCrawl.id) : null,
+    // A crawl in progress, or the failure of the last attempt since latestCrawl.
+    getCrawlActivity(db, siteId, latestCrawl?.finishedAt ?? null),
+  ]);
+  return { latestCrawl, latestIssueCount, latestPageCount, noindexWarning, crawlActivity };
 }
 
 function CheckRow({ label, value, tone }: { label: string; value: string; tone?: "danger" | "warning" }) {

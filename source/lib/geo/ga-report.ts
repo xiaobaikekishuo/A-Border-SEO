@@ -13,14 +13,18 @@ export const MAX_REPORT_ROWS = 50_000;
 const MAX_SNAPSHOT_ROWS = 10_000;
 const dimensions = ["date", "hostName", "sessionSource", "landingPage"];
 const dateRange = z.object({ start: z.iso.date(), end: z.iso.date() });
-export const gaRequest = dateRange.extend({
+const gaFields = dateRange.extend({
   propertyId: z.string().regex(/^[1-9][0-9]{0,19}$/),
   expectedUpdatedAt: z.iso.datetime().nullable(),
-  code: z.string().min(1).max(4096)
-}).strict().refine(({start,end}) => {
+});
+function validGaPeriod({ start, end }: z.infer<typeof dateRange>) {
   const days = (Date.parse(end) - Date.parse(start)) / 86400000 + 1;
   return days >= 1 && days <= 93;
-}, "Choose a period of 1 to 93 days");
+}
+export const gaReportRequest = gaFields.strict().refine(validGaPeriod, "Choose a period of 1 to 93 days");
+export const gaRequest = gaFields.extend({
+  code: z.string().min(1).max(4096)
+}).strict().refine(validGaPeriod, "Choose a period of 1 to 93 days");
 
 function problem(code: string, status: number) { return new ContentError(code, status); }
 
@@ -32,14 +36,16 @@ async function requestGoogle(url: string, init: RequestInit) {
   }
 }
 
-async function exchangeCode(code: string, origin: string) {
+async function exchangeCode(code: string, redirectUri: string, verifier?: string) {
   const clientId = process.env.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
   if (!clientId || !clientSecret) throw problem("GA_CONFIG", 503);
   const response = await requestGoogle("https://oauth2.googleapis.com/token", {
     method: "POST",
-    body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret,
-      code, grant_type: "authorization_code", redirect_uri: origin }),
+    body: new URLSearchParams({
+      client_id: clientId, client_secret: clientSecret, code, grant_type: "authorization_code",
+      redirect_uri: redirectUri, ...(verifier ? { code_verifier: verifier } : {}),
+    }),
   });
   if (!response.ok) throw problem("GA_AUTH", 403);
   const grant = z.object({ access_token: z.string().min(1), scope: z.string() }).safeParse(await response.json());
@@ -160,11 +166,11 @@ async function runReport(propertyId: string, token: string, report: object) {
   return await response.json() as unknown;
 }
 
-export async function fetchGaSnapshot(req: z.infer<typeof gaRequest>, siteDomain: string, origin: string) {
+export async function fetchGaSnapshot(req: z.infer<typeof gaRequest>, siteDomain: string, redirectUri: string, verifier?: string) {
   let host: string;
   try { host = new URL(siteDomain.includes("://") ? siteDomain : "https://" + siteDomain).hostname.toLowerCase(); }
   catch { throw problem("GA_SITE", 422); }
-  const token = await exchangeCode(req.code, origin);
+  const token = await exchangeCode(req.code, redirectUri, verifier);
   const period = {dateRanges:[{startDate:req.start,endDate:req.end}],metrics:[{name:"sessions"}]};
   const hostFilter = {filter:{fieldName:"hostName",stringFilter:{matchType:"EXACT",value:host,caseSensitive:false}}};
   const query = {

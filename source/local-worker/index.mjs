@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
   API_TIMEOUT_MS, HEARTBEAT_MS, LIMITS, POLL_MS, START_CODES, childEnv, execArgs, failureFromExit, generateToken, loginArgs,
-  parseConfig, promptText, safeCode, schemaText, signInArgs, summarizeEvents, tokenFrom, validateClaim,
+  parseConfig, promptText, safeCode, schemaText, signInArgs, summarizeEvents, tokenFrom, validateClaim, workerHeaders,
 } from "./lib.mjs";
 
 const HELP = `A-Border SEO 本地 Codex worker
@@ -42,6 +42,10 @@ const HELP = `A-Border SEO 本地 Codex worker
 const workerId = "local-" + randomBytes(16).toString("hex");
 const stop = new AbortController();
 let child = null;
+let codexSignedIn = false;
+function nativeState(state) { process.parentPort?.postMessage({ type: "worker-state", ...state }); }
+function stopWorker() { stop.abort(); if (child) killTree(child, process.platform); }
+process.parentPort?.on("message", event => { if (event.data?.type === "stop") stopWorker(); });
 
 function stamp() { return new Date().toISOString(); }
 async function log(config, event, fields = {}) {
@@ -99,16 +103,21 @@ async function resolveCodex(config) {
 }
 
 function killTree(proc, platform) {
-  if (!proc || proc.exitCode !== null || proc.signalCode !== null) return;
+  if (!proc?.pid || proc.exitCode !== null || proc.signalCode !== null) return;
+  const killChild = () => { try { proc.kill("SIGKILL"); } catch { /* already gone */ } };
   try {
-    if (platform === "win32") spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
-    else process.kill(-proc.pid, "SIGKILL");
-  } catch { try { proc.kill("SIGKILL"); } catch { /* already gone */ } }
+    if (platform === "win32") {
+      const killer = spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+      killer.once("error", killChild);
+      killer.once("exit", code => { if (code !== 0) killChild(); });
+    } else process.kill(-proc.pid, "SIGKILL");
+  } catch { killChild(); }
 }
 
 /** Runs a command without a shell, with bounded output and a deadline. */
-function runProcess(command, args, { env, cwd, input = "", timeoutMs, stdoutLimit = LIMITS.stdoutBytes, stderrLimit = LIMITS.stderrBytes, platform }) {
+function runProcess(command, args, { env, cwd, input = "", timeoutMs, stdoutLimit = LIMITS.stdoutBytes, stderrLimit = LIMITS.stderrBytes, platform, signal = stop.signal }) {
   return new Promise((resolvePromise, reject) => {
+    signal.throwIfAborted();
     let proc;
     try {
       proc = spawn(command, args, { cwd, env, shell: false, windowsHide: true, detached: platform !== "win32", stdio: ["pipe", "pipe", "pipe"] });
@@ -119,10 +128,10 @@ function runProcess(command, args, { env, cwd, input = "", timeoutMs, stdoutLimi
     child = proc;
     const out = [], err = [];
     let outBytes = 0, errBytes = 0, overflow = false, timedOut = false, settled = false;
-    const finish = (fn) => { if (!settled) { settled = true; clearTimeout(timer); stop.signal.removeEventListener("abort", onStop); if (child === proc) child = null; fn(); } };
+    const finish = (fn) => { if (!settled) { settled = true; clearTimeout(timer); signal.removeEventListener("abort", onStop); if (child === proc) child = null; fn(); } };
     const timer = setTimeout(() => { timedOut = true; killTree(proc, platform); }, timeoutMs);
     const onStop = () => killTree(proc, platform);
-    stop.signal.addEventListener("abort", onStop, { once: true });
+    signal.addEventListener("abort", onStop, { once: true });
     proc.stdout.on("data", chunk => {
       outBytes += chunk.length;
       if (outBytes > stdoutLimit) { overflow = true; killTree(proc, platform); return; }
@@ -143,16 +152,16 @@ function runProcess(command, args, { env, cwd, input = "", timeoutMs, stdoutLimi
   });
 }
 
-async function api(config, token, body, { path = "/api/local-content-worker", timeoutMs = API_TIMEOUT_MS } = {}) {
+async function api(config, token, body, { path = "/api/local-content-worker", timeoutMs = API_TIMEOUT_MS, signal } = {}) {
   let response;
   try {
     response = await fetch(config.baseUrl + path, {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(body),
+      headers: workerHeaders(config, token),
+      body: JSON.stringify(config.hosted && body.action === "heartbeat"
+        ? { ...body, metadata: { codexLogin: codexSignedIn, desktopVersion: config.desktopVersion } } : body),
       redirect: "manual",
-      // Not tied to the stop signal: a stopping worker still reports the job it gives up.
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs),
     });
   } catch { throw new Error("worker_api_failed"); }
   const text = await response.text().catch(() => "");
@@ -162,9 +171,9 @@ async function api(config, token, body, { path = "/api/local-content-worker", ti
   return { status: response.status, ok: response.ok, data };
 }
 
-async function ensureLogin(config, codex) {
+async function ensureLogin(config, codex, signal = stop.signal) {
   const result = await runProcess(codex, loginArgs(), {
-    env: childEnv(process.env, config), cwd: config.runtime, timeoutMs: 30_000, platform: config.platform,
+    env: childEnv(process.env, config), cwd: config.runtime, timeoutMs: 30_000, platform: config.platform, signal,
   });
   if (result.timedOut || result.exitCode !== 0 || !/Logged in using ChatGPT/i.test(result.stdout + "\n" + result.stderr)) throw new Error("chatgpt_login_required");
 }
@@ -175,19 +184,20 @@ function failure(code, usage = null) {
   return error;
 }
 
-async function runCodex(config, codex, job) {
+async function runCodex(config, codex, job, begin, signal) {
   const schema = schemaText(job.outputSchema);
   const prompt = promptText(job.prompt);
-  await ensureLogin(config, codex);
+  await ensureLogin(config, codex, signal);
   const jobs = join(config.runtime, "jobs");
   await mkdir(jobs, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(join(jobs, "job-"));
   try {
     await writeFile(join(directory, "schema.json"), schema, { mode: 0o600 });
+    if (!await begin()) return null;
     const run = await runProcess(codex, execArgs(config, directory), {
-      env: childEnv(process.env, config), cwd: directory, input: prompt, timeoutMs: config.timeoutSeconds * 1000, platform: config.platform,
+      env: childEnv(process.env, config), cwd: directory, input: prompt, timeoutMs: config.timeoutSeconds * 1000, platform: config.platform, signal,
     });
-    if (stop.signal.aborted) throw failure("worker_stopped");
+    signal.throwIfAborted();
     if (run.timedOut) throw failure("generation_timeout");
     if (run.overflow) throw failure("cli_output_limit");
     const summary = summarizeEvents(run.stdout);
@@ -207,34 +217,64 @@ async function runCodex(config, codex, job) {
   }
 }
 
-async function processJob(config, token, codex, job) {
+async function processJob(config, token, codex, job, managedProtocol) {
   const ids = { jobId: job.jobId };
   const lease = { jobId: job.jobId, leaseToken: job.leaseToken };
-  // The lease lasts 120 s; a heartbeat every 30 s keeps it while Codex works.
-  const heartbeat = setInterval(() => {
-    void api(config, token, { action: "heartbeat", workerId, ...lease }).catch(() => {});
-  }, HEARTBEAT_MS);
+  const running = new AbortController();
+  const signal = AbortSignal.any([stop.signal, running.signal]);
+  const begin = async () => {
+    signal.throwIfAborted();
+    if (!managedProtocol) return true;
+    const permit = await api(config, token, { action: "begin", ...lease }, { signal });
+    if (!permit.ok) throw failure("worker_api_failed");
+    return permit.data?.allowed === true;
+  };
+  let nextBeat, expires;
+  async function renew() {
+    try {
+      const beat = await api(config, token, { action: "heartbeat", workerId, ...lease }, { signal });
+      if (signal.aborted) return;
+      if ([401, 403, 409].includes(beat.status)) throw failure("worker_lease_lost");
+      const remaining = Date.parse(beat.data?.leaseExpiresAt) - Date.now();
+      if (!beat.ok || beat.data?.ok !== true || !Number.isFinite(remaining) || remaining <= 0) throw failure("worker_api_failed");
+      clearTimeout(expires);
+      expires = setTimeout(() => running.abort(failure("worker_lease_lost")), remaining);
+      nextBeat = setTimeout(renew, HEARTBEAT_MS);
+    } catch (error) {
+      running.abort(error);
+    }
+  }
   try {
+    await renew();
+    signal.throwIfAborted();
     if (job.provider === "CHATGPT_APP") {
+      if (config.hosted) throw failure("unsupported_provider");
+      if (!await begin()) return;
       // The app runs this one with the connected ChatGPT plan and records the result itself.
-      const result = await api(config, token, lease, { path: "/api/local-content-worker/chatgpt", timeoutMs: 560_000 });
+      const result = await api(config, token, lease, { path: "/api/local-content-worker/chatgpt", timeoutMs: 560_000, signal });
+      signal.throwIfAborted();
       await log(config, result.ok && result.data?.ok === true ? "chatgpt_job_completed" : "chatgpt_job_failed", ids);
       return;
     }
     if (job.provider !== "CODEX_LOCAL") throw failure("unsupported_provider");
-    const { answer, usage } = await runCodex(config, codex, job);
-    const done = await api(config, token, { action: "complete", ...lease, result: answer, ...(usage ? { usage } : {}) });
+    const generated = await runCodex(config, codex, job, begin, signal);
+    if (!generated) return;
+    signal.throwIfAborted();
+    const { answer, usage } = generated;
+    const done = await api(config, token, { action: "complete", ...lease, result: answer, ...(usage ? { usage } : {}) }, { signal });
     // 400: the server's schema check refused the answer.
     if (done.status === 400 || done.status === 422) throw failure("invalid_model_output", usage);
     if (!done.ok) throw failure("worker_api_failed", usage);
     await log(config, "job_completed", ids);
   } catch (error) {
-    const code = stop.signal.aborted ? "worker_stopped" : safeCode(error);
+    const code = stop.signal.aborted ? "worker_stopped" : safeCode(running.signal.aborted ? running.signal.reason : error);
     const usage = error?.usage ?? null;
     await api(config, token, { action: "fail", ...lease, error: code, ...(usage ? { usage } : {}) }).catch(() => {});
     await log(config, "job_failed", { ...ids, code });
   } finally {
-    clearInterval(heartbeat);
+    running.abort();
+    clearTimeout(nextBeat);
+    clearTimeout(expires);
   }
 }
 
@@ -269,8 +309,9 @@ async function main() {
     const codex = await resolveCodex(config);
     const code = await new Promise(done => {
       const proc = spawn(codex, signInArgs(), { env: childEnv(process.env, config), stdio: "inherit", shell: false, windowsHide: false });
+      child = proc;
       proc.on("error", () => done(127));
-      proc.on("close", done);
+      proc.on("close", code => { if (child === proc) child = null; done(code); });
     });
     if (code !== 0) throw new Error(code === 127 ? "codex_executable_missing" : "chatgpt_login_required");
     return;
@@ -284,20 +325,49 @@ async function main() {
   for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { stop.abort(); if (child) killTree(child, config.platform); });
   try {
     const codex = await resolveCodex(config);
+    if (config.hosted) {
+      const version = await runProcess(codex, ["--version"], { env: childEnv(process.env, config), cwd: config.runtime, timeoutMs: 30_000, platform: config.platform });
+      if (version.exitCode !== 0) throw new Error("codex_executable_missing");
+      nativeState({ available: true });
+    }
     const beat = await api(config, token, { action: "heartbeat", workerId });
     if (beat.status === 401) throw new Error("worker_token_invalid");
     if (!beat.ok) throw new Error("worker_api_failed");
     await log(config, "worker_started", { workerId, mode: config.mode });
+    let managedProtocol = false;
     while (!stop.signal.aborted) {
-      const claimed = await api(config, token, { action: "claim", workerId });
+      if (config.hosted) {
+        try { await ensureLogin(config, codex); codexSignedIn = true; nativeState({ phase: "running", signedIn: true, error: null }); }
+        catch (error) {
+          if (stop.signal.aborted) break;
+          if (error.message === "codex_executable_missing") throw error;
+          codexSignedIn = false;
+          nativeState({ phase: "waiting_login", signedIn: false, error: "chatgpt_login_required" });
+        }
+        const alive = await api(config, token, { action: "heartbeat", workerId });
+        if (alive.status === 401 || alive.status === 403) throw new Error("worker_token_invalid");
+        if (!codexSignedIn || !alive.ok) {
+          if (config.mode === "once") break;
+          await sleep(15_000, undefined, { signal: stop.signal }).catch(() => {});
+          continue;
+        }
+      }
+      const request = { action: "claim", workerId };
+      let claimed = await api(config, token, { ...request, ...(managedProtocol ? { protocolVersion: 2 } : {}) });
+      if (claimed.ok && !managedProtocol && claimed.data?.managedProtocol === 2) {
+        claimed = await api(config, token, { ...request, protocolVersion: 2 });
+      }
       if (!claimed.ok) {
         if (claimed.status === 401) throw new Error("worker_token_invalid");
+        managedProtocol = false;
         await log(config, "claim_failed", { code: "worker_api_failed", status: claimed.status });
       } else {
+        managedProtocol = claimed.data?.managedProtocol === 2;
         const job = validateClaim(claimed.data);
         if (job) {
+          nativeState({ phase: "working" });
           await log(config, "job_claimed", { jobId: job.jobId, provider: job.provider });
-          await processJob(config, token, codex, job);
+          await processJob(config, token, codex, job, managedProtocol);
           if (config.mode === "once") break;
           continue;
         }
@@ -307,6 +377,7 @@ async function main() {
       if (!stop.signal.aborted) await api(config, token, { action: "heartbeat", workerId }).catch(() => {});
     }
     await log(config, "worker_stopped");
+    nativeState({ phase: "stopped" });
   } finally {
     await release();
   }
@@ -314,6 +385,10 @@ async function main() {
 
 main().catch(async error => {
   const code = safeCode(error, START_CODES, "worker_failed");
+  nativeState({ phase: "failed", error: code, ...(code === "codex_executable_missing" ? { available: false } : {}) });
   console.error(`[${stamp()}] ${code}`);
   process.exitCode = 1;
+}).finally(() => {
+  // Electron's parent message port keeps the event loop alive after all work finishes.
+  if (process.parentPort) { process.parentPort.removeAllListeners("message"); setImmediate(() => process.exit(process.exitCode ?? 0)); }
 });

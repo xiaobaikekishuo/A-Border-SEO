@@ -9,9 +9,17 @@ import { assertKeywordRequest, keywordResearchPrompt, validateKeywordIdeas } fro
 import { assertResearchRequest, isResearchAnalysis, researchAnalysisPrompt, validateResearchResult } from "./research-analysis";
 import type { WorkbenchDb } from "./data";
 import { aiUsageSchema, storedUsage, type AiUsage } from "@/lib/ai-usage/schema";
+import { managedUserScope } from "@/lib/managed/identity";
+import { managedAllows } from "@/lib/managed/policy";
+import { managedSiteAllows } from "@/lib/managed/worker-owner";
+import { hostedLeaseScope, hostedClaimScope } from "@/lib/hosted/worker";
+import { hostedContext } from "@/lib/hosted/context";
+import { hostedMode } from "@/lib/hosted/control";
+import { reportSources, type ReportEvidence } from "./action-scope";
+import { buildReportPrompt, buildReportWorkerClaim, REPORT_CLAIM_TOO_LARGE } from "./report-claim";
 
 function leaseWhere(jobId: string, leaseToken: string, now: Date) {
-  return { id: jobId, status: "RUNNING" as const, leaseToken, leaseExpiresAt: { gt: now }, startedAt: { gt: new Date(now.getTime() - RUN_TIMEOUT_MS) } };
+  return { id: jobId, status: "RUNNING" as const, leaseToken, leaseExpiresAt: { gt: now }, startedAt: { gt: new Date(now.getTime() - RUN_TIMEOUT_MS) }, ...hostedLeaseScope() };
 }
 export function buildWorkbenchPrompt(request: unknown, context: unknown) {
   const input = workbenchRequestSchema.parse(request);
@@ -19,6 +27,9 @@ export function buildWorkbenchPrompt(request: unknown, context: unknown) {
   assertResearchRequest(input);
   if (isResearchAnalysis(input.kind)) return researchAnalysisPrompt(input, context);
   if (input.kind === "KEYWORD_RESEARCH") return keywordResearchPrompt(input, context);
+  if (input.actionScope) {
+    return buildReportPrompt(input, (context as { reportEvidence: ReportEvidence }).reportEvidence);
+  }
   return `You are the site's content and SEO drafting assistant. Complete only the selected task: ${input.kind}.
 Use ${input.language === "en" ? "English" : "Simplified Chinese"} for the draft and recommendations.
 WRITE_ARTICLE: write a useful full article draft grounded in the topic and supplied evidence. REWRITE_ARTICLE: revise the supplied body while preserving supported facts. SEO_FIX_PLAN: produce a prioritized proposed fix plan with observed evidence, suggested changes, concrete text snippets when supported, and manual verification steps.
@@ -35,7 +46,15 @@ USER REQUEST:\n${JSON.stringify(input)}\nEVIDENCE:\n${JSON.stringify(context)}`;
 export function validateWorkbenchResult(input: unknown, domain: string, rawContext: unknown) {
   const result = workbenchResultSchema.parse(input);
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > 450 * 1024) throw new ContentError("Workbench output is too large");
-  const context = rawContext as { allowedInternalLinks?: unknown; body?: unknown } | null;
+  const context = rawContext as { allowedInternalLinks?: unknown; body?: unknown; reportEvidence?: ReportEvidence } | null;
+  if (context?.reportEvidence) {
+    const refs = new Set(reportSources(context.reportEvidence).map(row => row.ref));
+    if (!result.reportActions || result.reportActions.some(item => item.evidenceRefs.some(ref => !refs.has(ref)))) {
+      throw new ContentError("Report actions must cite rows from the reviewed report", 400);
+    }
+  } else if (result.reportActions) {
+    throw new ContentError("Report actions require a report snapshot", 400);
+  }
   const body = typeof context?.body === "string" ? context.body : "";
   const spans: { start: number; end: number }[] = [];
   const ids = new Set<string>();
@@ -58,6 +77,7 @@ export function validateWorkbenchResult(input: unknown, domain: string, rawConte
   };
   result.internalLinks.forEach(link => validate(link.target));
   const text = [result.title, result.summary, result.contentMarkdown, result.metaTitle, result.metaDescription, ...result.changeNotes, ...result.factChecks,
+    ...(result.reportActions ?? []).flatMap(item => [item.title, item.reason, item.nextStep, item.verify]),
     ...result.internalLinks.flatMap(link => [link.anchor, link.reason]),
     ...(result.paragraphEdits ?? []).flatMap(edit => [edit.replacementText, edit.reason, ...edit.evidence, ...edit.verification]),
     ...(result.keywordIdeas ?? []).flatMap(idea => [idea.keyword, idea.cluster, idea.angle, idea.rationale])].join("\n");
@@ -70,21 +90,36 @@ export function validateWorkbenchResult(input: unknown, domain: string, rawConte
 }
 
 export async function claimWorkbenchJob(db: WorkbenchDb, jobId: string, now: Date) {
+  const scope = await managedUserScope(db);
+  if ((scope.managed && !scope.userId) || !managedAllows("codex")) return { job: null };
   const leaseToken = randomUUID(); const leaseExpiresAt = new Date(now.getTime() + LEASE_MS);
-  const changed = await db.aiWorkbenchJob.updateMany({ where: { id: jobId, status: "QUEUED" }, data: { status: "RUNNING", leaseToken, leaseExpiresAt, startedAt: now, updatedAt: now } });
+  const changed = await db.aiWorkbenchJob.updateMany({ where: { id: jobId, status: "QUEUED",
+    ...(scope.managed && { site: { userId: scope.userId! } }), ...hostedClaimScope() },
+    data: { status: "RUNNING", leaseToken, leaseExpiresAt, startedAt: now, updatedAt: now, executionAuthorizedAt: null,
+      ...(hostedContext.getStore() ? { hostedDeviceId: hostedContext.getStore()!.deviceId } : {}) } });
   if (!changed.count) return { job: null };
   try {
     const job = await db.aiWorkbenchJob.findFirstOrThrow({ where: { id: jobId, status: "RUNNING", leaseToken } });
+    if (!await managedSiteAllows(db, job.siteId)) {
+      await db.aiWorkbenchJob.updateMany({ where: { id: jobId, status: "RUNNING", leaseToken },
+        data: { status: "QUEUED", leaseToken: null, leaseExpiresAt: null, startedAt: null } });
+      return { job: null };
+    }
     const input = workbenchRequestSchema.parse(job.request);
     assertKeywordRequest(input);
     assertResearchRequest(input);
     // Empty CLI fields make older helpers fail closed before calling an account.
-    if (input.provider === "CHATGPT_APP") return { job: { jobId, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(), provider: "CHATGPT_APP", prompt: "", outputSchema: {} } };
+    if (input.provider === "CHATGPT_APP" && !hostedMode()) return { job: { jobId, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(), provider: "CHATGPT_APP", prompt: "", outputSchema: {} } };
+    if (input.actionScope) {
+      const { reportEvidence } = job.context as unknown as { reportEvidence: ReportEvidence };
+      return { job: buildReportWorkerClaim(input, reportEvidence, { jobId, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString() }) };
+    }
     const prompt = buildWorkbenchPrompt(job.request, job.context);
     if (prompt.length > 195000) throw new ContentError("Workbench prompt is too large");
-    return { job: { jobId, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(), prompt, outputSchema: z.toJSONSchema(generationSchemaFor(input.kind), { target: "draft-7" }) } };
+    return { job: { jobId, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(), provider: "CODEX_LOCAL", prompt, outputSchema: z.toJSONSchema(generationSchemaFor(input.kind, input.actionScope), { target: "draft-7" }) } };
   } catch (error) {
-    await db.aiWorkbenchJob.updateMany({ where: { id: jobId, status: "RUNNING", leaseToken }, data: { status: "FAILED", error: "Unable to prepare workbench task", activeKey: null, leaseToken: null, leaseExpiresAt: null, finishedAt: now, updatedAt: now } });
+    const reason = error instanceof ContentError && error.message === REPORT_CLAIM_TOO_LARGE ? REPORT_CLAIM_TOO_LARGE : "Unable to prepare workbench task";
+    await db.aiWorkbenchJob.updateMany({ where: { id: jobId, status: "RUNNING", leaseToken }, data: { status: "FAILED", error: reason, activeKey: null, leaseToken: null, leaseExpiresAt: null, finishedAt: now, updatedAt: now } });
     throw error;
   }
 }
@@ -98,11 +133,12 @@ export async function runWorkbenchLease(db: WorkbenchDb, action: LeaseAction, no
     const leaseExpiresAt = new Date(Math.min(now.getTime() + LEASE_MS, job.startedAt.getTime() + RUN_TIMEOUT_MS));
     const changed = await db.aiWorkbenchJob.updateMany({ where, data: { leaseExpiresAt } });
     if (!changed.count) throw new ContentError("Job lease is no longer valid", 409);
-    await db.contentWorkerState.upsert({ where: { id: action.workerId }, create: { id: action.workerId, lastSeenAt: now }, update: { lastSeenAt: now } });
+    const workerId = hostedContext.getStore() ? `hosted:${hostedContext.getStore()!.deviceId}` : action.workerId;
+    await db.contentWorkerState.upsert({ where: { id: workerId }, create: { id: workerId, lastSeenAt: now }, update: { lastSeenAt: now } });
     return { ok: true, leaseExpiresAt: leaseExpiresAt.toISOString() };
   }
   const usage = action.usage ? storedUsage(aiUsageSchema.parse(action.usage)) : null;
-  if (usage && (usage.source !== "CODEX_CLI" || workbenchRequestSchema.parse(job.request).provider !== "CODEX_LOCAL")) throw new ContentError("Worker usage does not match this job's provider", 409);
+  if (usage && (usage.source !== "CODEX_CLI" || (!hostedMode() && workbenchRequestSchema.parse(job.request).provider !== "CODEX_LOCAL"))) throw new ContentError("Worker usage does not match this job's provider", 409);
   const result = action.action === "complete" ? validateWorkbenchResult(action.result, job.site.domain, job.context) : null;
   if (result) validateKeywordIdeas(result, workbenchRequestSchema.parse(job.request));
   if (result) validateResearchResult(result, workbenchRequestSchema.parse(job.request));

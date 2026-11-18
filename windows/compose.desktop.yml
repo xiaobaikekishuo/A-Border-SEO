@@ -1,0 +1,21 @@
+# Included only by the desktop controller. The private directory holds maintenance and the local login nonce.
+x-maintenance: &maintenance
+  type: bind
+  source: ${ABORDER_DESKTOP_MAINTENANCE_DIR:?desktop_maintenance_directory_required}
+  target: /run/aborder-desktop
+  read_only: true
+  bind:
+    create_host_path: false
+services:
+  app:
+    environment:
+      ABORDER_DESKTOP_MODE: "1"
+      ABORDER_DESKTOP_MAINTENANCE_FILE: /run/aborder-desktop/maintenance
+      ABORDER_DESKTOP_LOGIN_NONCE_FILE: /run/aborder-desktop/login-nonce
+    volumes:
+      - *maintenance
+  worker:
+    environment:
+      ABORDER_DESKTOP_MAINTENANCE_FILE: /run/aborder-desktop/maintenance
+    volumes:
+      - *maintenance

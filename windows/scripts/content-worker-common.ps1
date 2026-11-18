@@ -182,7 +182,11 @@ function Get-ContentWorkerToken([string]$Root) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'worker_token_missing' }
     $bytes = $null
     try {
-        $bytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($path), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+        try {
+            $bytes = [Security.Cryptography.ProtectedData]::Unprotect([IO.File]::ReadAllBytes($path), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)
+        } catch [Security.Cryptography.CryptographicException] {
+            throw 'worker_token_invalid'
+        }
         $token = [Text.Encoding]::UTF8.GetString($bytes)
         if ($token -cnotmatch '^[A-Za-z0-9_-]{32,200}$') { throw 'worker_token_invalid' }
         return $token

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { CodexWorkbench } from "@/components/ai-workbench/workbench";
 import type { DiagnosticSelection } from "@/lib/ai-workbench/diagnostic-types";
+import { parseActionScope } from "@/lib/ai-workbench/action-scope";
 
 export default async function AssistantPage({ params, searchParams }: { params: Promise<{ siteId: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const session = await auth();
@@ -13,5 +14,6 @@ export default async function AssistantPage({ params, searchParams }: { params: 
   const initialSelection: DiagnosticSelection = {};
   for (const key of ["pageId", "url", "query"] as const) if (typeof query[key] === "string") initialSelection[key] = query[key].slice(0, key === "url" ? 2048 : key === "query" ? 250 : 200);
   if (typeof query.opportunity === "string" && ["striking_distance", "low_ctr", "content_decay", "cannibalization"].includes(query.opportunity)) initialSelection.opportunity = query.opportunity as DiagnosticSelection["opportunity"];
-  return <CodexWorkbench key={`${siteId}:${JSON.stringify(initialSelection)}`} siteId={siteId} domain={site.domain} initialSelection={initialSelection} />;
+  const scope = parseActionScope(query.actionScope);
+  return <CodexWorkbench key={`${siteId}:${scope ?? ""}:${JSON.stringify(initialSelection)}`} siteId={siteId} domain={site.domain} initialSelection={initialSelection} actionScope={scope} />;
 }

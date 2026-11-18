@@ -8,7 +8,7 @@ import { importablePage, importPageColumns, sameSitePageUrl } from "./page-evide
 type Tx = Prisma.TransactionClient;
 type Site = { id: string; domain: string };
 const json = (value: unknown) => value as Prisma.InputJsonValue;
-export async function startArticleReview(tx: Tx, site: Site, pageIds: string[], pastedText: Record<string, string>) {
+export async function startArticleReview(tx: Tx, site: Site, pageIds: string[], pastedText: Record<string, string>, hostedDeviceId?: string) {
   if (await tx.contentPlanJob.count({ where: { siteId: site.id, status: { in: ["QUEUED", "RUNNING"] } } })) throw new ContentError("A content plan is already queued or running for this site", 409);
   const pillars = await tx.contentPillar.findMany({ where: { siteId: site.id }, orderBy: { createdAt: "asc" }, select: { id: true, title: true, keyword: true, description: true } });
   if (!pillars.length) throw new ContentError("Create a pillar before reviewing articles");
@@ -32,7 +32,7 @@ export async function startArticleReview(tx: Tx, site: Site, pageIds: string[], 
     }), pillars, crawlAt: crawl.finishedAt?.toISOString() ?? null,
     allowedInternalLinks: known.flatMap(page => { const url = sameSitePageUrl(page.url, site.domain); return url ? [url] : []; }),
   });
-  const job = await tx.contentPlanJob.create({ data: { siteId: site.id, pillarId: pillars[0].id, kind: "ARTICLE_REVIEW", topicCount: ids.length, activeKey: site.id, request: json(request) }, select: { id: true } });
+  const job = await tx.contentPlanJob.create({ data: { siteId: site.id, hostedDeviceId, pillarId: pillars[0].id, kind: "ARTICLE_REVIEW", topicCount: ids.length, activeKey: site.id, request: json(request) }, select: { id: true } });
   return { ok: true, job };
 }
 

@@ -36,6 +36,6 @@ describe("onboarding checklist", () => {
   it("has no dialog once a site exists", () => {
     const html = render(true);
     expect(html).not.toContain("[add-site-dialog]");
-    expect(html).toMatch(/<a [^>]*href="\/sites\/site-a"[^>]*>Connect</);
+    expect(html).toMatch(/<a [^>]*href="\/sites\/site-a\/settings#gsc-connection"[^>]*>Connect</);
   });
 });

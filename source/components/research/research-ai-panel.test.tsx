@@ -24,7 +24,15 @@ describe("research tasks and account boundaries", () => {
   it("requires an eligible connected account, valid input and an idle worker", () => {
     expect(canGenerateResearch("DOMAIN_ANALYSIS", input, execution, state)).toBe(true);
     for (const flag of ["active", "busy", "loading", "uncertain"] as const) expect(canGenerateResearch("DOMAIN_ANALYSIS", input, execution, { ...state, [flag]: true })).toBe(false);
-    for (const missing of [{ provider: "CODEX_LOCAL" as const }, { ready: false }, { profileId: undefined }, { model: undefined }, { planOnlyConfirmed: false }]) expect(canGenerateResearch("BACKLINK_ANALYSIS", input, { ...execution, ...missing }, state)).toBe(false);
+    for (const missing of [{ ready: false }, { profileId: undefined }, { model: undefined }, { planOnlyConfirmed: false }]) expect(canGenerateResearch("BACKLINK_ANALYSIS", input, { ...execution, ...missing }, state)).toBe(false);
+    for (const kind of ["DOMAIN_ANALYSIS", "BACKLINK_ANALYSIS"] as const) {
+      const native = { provider: "CODEX_LOCAL" as const, ready: true };
+      expect(canGenerateResearch(kind, input, native, state)).toBe(true);
+      expect(canGenerateResearch(kind, input, { ...native, ready: false }, state)).toBe(false);
+      const payload = researchTaskPayload(kind, input, native);
+      expect(payload.provider).toBe("CODEX_LOCAL");
+      for (const field of ["profileId", "model", "planOnlyConfirmed"]) expect(payload).not.toHaveProperty(field);
+    }
     expect(canGenerateResearch("DOMAIN_ANALYSIS", input, execution, { ...state, online: false })).toBe(false);
     expect(canGenerateResearch("DOMAIN_ANALYSIS", { ...input, title: " " }, execution, state)).toBe(false);
     expect(canGenerateResearch("DOMAIN_ANALYSIS", { ...input, targetMarket: "x".repeat(121) }, execution, state)).toBe(false);

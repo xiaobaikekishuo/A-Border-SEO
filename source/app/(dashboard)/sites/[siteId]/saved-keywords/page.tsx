@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { SaveKeywordForm } from "@/components/sites/saved-keyword-actions";
 import { SavedKeywordsTable } from "@/components/sites/saved-keywords-table";
-import { getGscDateRange } from "@/lib/date-utils";
+import { getTopKeywords } from "@/lib/seo-metrics";
 
 interface Props {
   params: Promise<{ siteId: string }>;
@@ -28,32 +28,8 @@ export default async function SavedKeywordsPage({ params }: Props) {
     orderBy: { createdAt: "desc" },
   });
 
-  // Get latest keyword data for saved queries
-  const { start, end } = getGscDateRange(28);
-  const startDate = new Date(`${start}T00:00:00.000Z`);
-  const endDate = new Date(`${end}T23:59:59.999Z`);
-
-  const keywordData = saved.length > 0
-    ? await db.keyword.groupBy({
-        by: ["query"],
-        where: {
-          siteId,
-          query: { in: saved.map((s) => s.query) },
-          date: { gte: startDate, lte: endDate },
-        },
-        _sum: { clicks: true, impressions: true },
-        _avg: { position: true, ctr: true },
-      })
-    : [];
-
-  const dataMap = new Map(
-    keywordData.map((k) => [k.query, {
-      clicks: k._sum.clicks ?? 0,
-      impressions: k._sum.impressions ?? 0,
-      position: k._avg.position ?? 0,
-      ctr: k._avg.ctr ?? 0,
-    }])
-  );
+  const keywordData = await getTopKeywords(siteId, 28, saved.length, saved.map(row => row.query));
+  const dataMap = new Map(keywordData.map(row => [row.query, row]));
 
   return (
     <div>

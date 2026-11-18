@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { db, fetchSearchAnalytics, fetchPageAnalytics, FakeReauthError } = vi.hoisted(() => {
   class FakeReauthError extends Error {
@@ -29,6 +29,7 @@ vi.mock("@/lib/google", async () => {
   return {
     fetchSearchAnalytics,
     fetchPageAnalytics,
+    fetchPropertyAnalytics: async () => [],
     gscDate,
     ReauthRequiredError: FakeReauthError,
   };
@@ -96,6 +97,9 @@ function writtenDates() {
 const originalTZ = process.env.TZ;
 
 beforeEach(() => {
+  // Keep the fixed GSC row inside the 56-day refresh range as calendar time moves.
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-09-20T12:00:00.000Z"));
   vi.clearAllMocks();
   db.$transaction.mockImplementation(async (work: (tx: unknown) => unknown) => work(db));
   db.$queryRaw.mockResolvedValue([{ userId: "user-1", gscProperty: "sc-domain:quayline.app" }]);
@@ -104,6 +108,8 @@ beforeEach(() => {
   fetchSearchAnalytics.mockResolvedValue([keywordRow]);
   fetchPageAnalytics.mockResolvedValue([pageRow]);
 });
+
+afterEach(() => { vi.useRealTimers(); });
 
 afterAll(() => {
   process.env.TZ = originalTZ;

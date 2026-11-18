@@ -18,7 +18,7 @@ $instance = [Guid]::NewGuid().ToString('N')
 $pwsh = (Get-Process -Id $PID).Path
 # Paths are passed to PowerShell -File, never evaluated as command text.
 foreach ($value in @($workerScript, $Root, $CodexExe)) { if ($value.Contains('"')) { throw 'invalid_path' } }
-$arguments = @('-NoLogo', '-NoProfile', '-File', ('"' + $workerScript + '"'), '-Watch', '-Root', ('"' + $Root + '"'), '-InstanceId', $instance)
+$arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-File', ('"' + $workerScript + '"'), '-Watch', '-Root', ('"' + $Root + '"'), '-InstanceId', $instance)
 if (-not [string]::IsNullOrWhiteSpace($CodexExe)) { $arguments += @('-CodexExe', ('"' + $CodexExe + '"')) }
 $process = Start-Process -FilePath $pwsh -ArgumentList $arguments -WindowStyle Hidden -PassThru
 $startupTimer = [Diagnostics.Stopwatch]::StartNew()

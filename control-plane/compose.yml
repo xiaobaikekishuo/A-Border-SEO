@@ -1,0 +1,40 @@
+services:
+  control:
+    build:
+      context: ..
+      dockerfile: control-plane/Dockerfile
+    environment:
+      ABORDER_CONTROL_ORIGIN: https://${ABORDER_CONTROL_HOST:?set the public management hostname}
+      ABORDER_CONTROL_BIND: 0.0.0.0
+      ABORDER_CONTROL_PORT: "8080"
+      ABORDER_CONTROL_SIGNING_KEY_FILE: /run/keys/signing.pem
+      ABORDER_CONTROL_SIGNING_KID: ${ABORDER_CONTROL_SIGNING_KID:?set the key identifier}
+      ABORDER_CONTROL_LEASE_SECONDS: ${ABORDER_CONTROL_LEASE_SECONDS:-900}
+    restart: unless-stopped
+    volumes:
+      - control-data:/app/data
+      - ./secrets:/run/keys:ro
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 4
+  proxy:
+    image: caddy:2-alpine
+    environment:
+      ABORDER_CONTROL_HOST: ${ABORDER_CONTROL_HOST:?set the public management hostname}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - proxy-data:/data
+      - proxy-config:/config
+    depends_on:
+      control:
+        condition: service_healthy
+    restart: unless-stopped
+volumes:
+  control-data:
+  proxy-data:
+  proxy-config:

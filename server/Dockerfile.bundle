@@ -1,0 +1,34 @@
+# Build from the repository root. This is a release builder, not a client runtime.
+# The resulting tar runs on an existing Linux x64 Node 24 / PostgreSQL 16 host.
+FROM node:24-bookworm-slim AS deps
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY source/package.json source/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+
+FROM deps AS builder
+ARG BUILD_VERSION
+COPY source/ ./
+RUN node -e 'if(require("./package.json").version!==process.env.BUILD_VERSION)process.exit(1)'
+RUN DATABASE_URL="postgresql://build:build@127.0.0.1/build" npx prisma generate
+RUN --network=none npm run build
+RUN --network=none node scripts/build-worker.mjs /build/worker.cjs
+RUN --network=none node scripts/stage-prisma-cli.mjs /build/prisma-cli
+RUN mkdir -p /bundle/app /out \
+    && cp -a .next/standalone/. /bundle/app/ \
+    && cp -a .next/static /bundle/app/.next/static \
+    && cp -a public prisma /bundle/app/ \
+    && cp -a node_modules/.prisma /bundle/app/node_modules/ \
+    && cp -a prisma-cli/. /bundle/app/node_modules/ \
+    && cp worker.cjs /bundle/app/worker.cjs \
+    && rm -rf /bundle/app/.next/cache
+COPY server/deploy/ /bundle/server/deploy/
+COPY server/build-manifest.mjs /build-tools/build-manifest.mjs
+RUN --network=none node /build-tools/build-manifest.mjs /bundle /build/package.json
+RUN --network=none tar --hard-dereference --owner=0 --group=0 -C /bundle -czf "/out/aborder-seo-server-${BUILD_VERSION}-linux-x64.tar.gz" . \
+    && cd /out && sha256sum *.tar.gz > SHA256SUMS
+
+FROM scratch AS export
+COPY --from=builder /out/ /

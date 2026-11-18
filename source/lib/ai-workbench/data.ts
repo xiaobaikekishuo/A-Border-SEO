@@ -7,7 +7,13 @@ import { articleSearchEvidence } from "@/lib/content-planner/article-search-evid
 import { assertPlanConnection } from "@/lib/chatgpt-connection/service";
 import { visibleIssuesWhere } from "@/lib/crawler/issue-filter";
 import { auditIssueDisplayType } from "@/lib/crawler/audit-policy";
+import { managedAllows } from "@/lib/managed/policy";
+import { hostedMode } from "@/lib/hosted/control";
+import { hostedWorkerStatus, hostedRequestDeviceId } from "@/lib/hosted/worker";
 import { collectDiagnosticEvidence } from "./diagnostic";
+import { collectActionEvidence, actionEvidenceRevision } from "./action-evidence";
+import { reportSources, type ReportEvidence } from "./action-scope";
+import { buildReportWorkerClaim } from "./report-claim";
 import { assertKeywordRequest, buildKeywordContext } from "./keyword-research";
 import { assertResearchRequest, buildResearchContext, isResearchAnalysis, type ResearchEvidence, type ResearchKind } from "./research-analysis";
 import type { DiagnosticEvidence } from "./diagnostic-types";
@@ -17,8 +23,8 @@ export type WorkbenchDb = PrismaClient;
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => value as Prisma.InputJsonValue;
 export const CANCEL_MESSAGE = "Canceled by user. The local helper stops at its next heartbeat; already used quota is not refunded.";
-export function expireWorkbenchJobs(db: WorkbenchDb | Tx, now: Date, siteId?: string) {
-  return db.aiWorkbenchJob.updateMany({ where: { ...(siteId ? { siteId } : {}), OR: [
+export function expireWorkbenchJobs(db: WorkbenchDb | Tx, now: Date, siteId?: string, userId?: string) {
+  return db.aiWorkbenchJob.updateMany({ where: { ...(siteId ? { siteId } : {}), ...(userId ? { site: { userId } } : {}), OR: [
     { status: "QUEUED", createdAt: { lte: new Date(now.getTime() - QUEUE_TIMEOUT_MS) } },
     { status: "RUNNING", OR: [{ leaseExpiresAt: { lte: now } }, { leaseExpiresAt: null }, { startedAt: { lte: new Date(now.getTime() - RUN_TIMEOUT_MS) } }] },
   ] }, data: { status: "FAILED", activeKey: null, leaseToken: null, leaseExpiresAt: null, finishedAt: now,
@@ -42,6 +48,17 @@ function diagnosticSnapshot(diagnostic: DiagnosticEvidence) {
     page: page ? pageFacts as Omit<NonNullable<DiagnosticEvidence["page"]>, "body"> : null };
 }
 async function buildContext(tx: Tx, site: { id: string; domain: string }, input: WorkbenchRequest, now = new Date()) {
+  if (input.actionScope || input.evidenceRevision) {
+    if (input.kind !== "SEO_FIX_PLAN" || !input.actionScope || !input.evidenceRevision || input.diagnosis || input.pageId || input.clusterId || input.body) {
+      throw new ContentError("Invalid report evidence selection", 400);
+    }
+    const reportEvidence = await collectActionEvidence(tx, { id: site.id, domain: site.domain }, input.actionScope, now);
+    if (input.evidenceRevision !== actionEvidenceRevision(reportEvidence)) throw new ContentError("report_evidence_changed", 409);
+    if (!reportEvidence.hasData) throw new ContentError("report_evidence_empty", 409);
+    const urls = reportEvidence.sections.flatMap(section => section.rows.map(row =>
+      typeof row.url === "string" && row.url.length <= 2048 ? sameSiteUrl(row.url, site.domain) : null));
+    return { domain: site.domain, reportEvidence, allowedInternalLinks: [...new Set(urls.filter((url): url is string => !!url))] };
+  }
   if (isResearchAnalysis(input.kind)) return buildResearchContext(tx, site, input, now);
   if (input.kind === "KEYWORD_RESEARCH") return buildKeywordContext(tx, site, input);
   if (input.pageId && input.diagnosis?.pageId && input.pageId !== input.diagnosis.pageId) throw new ContentError("Selected page does not match the diagnosis", 400);
@@ -91,7 +108,7 @@ export async function getWorkbenchWorkspace(db: WorkbenchDb, userId: string | un
     crawl ? db.auditPage.findMany({ where: { crawlId: crawl.id }, orderBy: { url: "asc" }, take: 150, select: { id: true, url: true, title: true, articleText: true } }) : [],
     db.contentCluster.findMany({ where: { siteId }, orderBy: { createdAt: "desc" }, take: 100, select: { id: true, title: true, keyword: true, url: true, pillar: { select: { title: true } } } }),
     db.aiWorkbenchJob.findMany({ where: { siteId, kind: kind ?? { notIn: ["KEYWORD_RESEARCH", "DOMAIN_ANALYSIS", "BACKLINK_ANALYSIS"] } }, orderBy: { createdAt: "desc" }, take: 20, select: { id: true, kind: true, title: true, status: true, createdAt: true, updatedAt: true, startedAt: true, finishedAt: true, error: true, draftText: true, result: true, context: true } }),
-    db.contentWorkerState.findFirst({ orderBy: { lastSeenAt: "desc" } }),
+    hostedWorkerStatus(db, userId!),
     db.aiWorkbenchJob.findFirst({ where: { siteId, status: { in: ["QUEUED", "RUNNING"] } }, orderBy: { createdAt: "asc" }, select: { id: true, kind: true, title: true } }),
   ]);
   return { site, activeTask, worker: { online: !!worker && now.getTime() - worker.lastSeenAt.getTime() < WORKER_ONLINE_MS, lastSeenAt: worker?.lastSeenAt.toISOString() ?? null },
@@ -99,17 +116,29 @@ export async function getWorkbenchWorkspace(db: WorkbenchDb, userId: string | un
     clusters: clusters.map(({ pillar, ...cluster }) => ({ ...cluster, pillarTitle: pillar.title })),
     jobs: jobs.map(({ context, ...job }) => {
       const snapshot = context && typeof context === "object" && !Array.isArray(context) ? context.diagnosis : null;
+      const report = context && typeof context === "object" && !Array.isArray(context) ? context.reportEvidence : null;
       const researchEvidence = context && typeof context === "object" && !Array.isArray(context) && isResearchAnalysis(job.kind) ? context.researchEvidence : null;
-      return { ...job, ...(snapshot ? { diagnosis: snapshot as unknown as NonNullable<WorkbenchWorkspace["jobs"][number]["diagnosis"]> } : {}), ...(researchEvidence ? { researchEvidence: researchEvidence as unknown as ResearchEvidence } : {}), result: workbenchResultSchema.safeParse(job.result).data ?? null, createdAt: job.createdAt.toISOString(), updatedAt: job.updatedAt.toISOString(), startedAt: job.startedAt?.toISOString() ?? null, finishedAt: job.finishedAt?.toISOString() ?? null };
+      const result = workbenchResultSchema.safeParse(job.result).data ?? null;
+      const refs = new Set(result?.reportActions?.flatMap(item => item.evidenceRefs));
+      const sources = report && refs.size ? reportSources(report as unknown as ReportEvidence)
+        .filter(item => refs.has(item.ref)).map(item => ({ ...item, url: sameSiteUrl(item.url, site.domain) })) : undefined;
+      return { ...job, ...(sources ? { reportSources: sources } : {}), ...(snapshot ? { diagnosis: snapshot as unknown as NonNullable<WorkbenchWorkspace["jobs"][number]["diagnosis"]> } : {}), ...(researchEvidence ? { researchEvidence: researchEvidence as unknown as ResearchEvidence } : {}), result, createdAt: job.createdAt.toISOString(), updatedAt: job.updatedAt.toISOString(), startedAt: job.startedAt?.toISOString() ?? null, finishedAt: job.finishedAt?.toISOString() ?? null };
     }) };
 }
 
 export async function runWorkbenchAction(db: WorkbenchDb, userId: string | undefined | null, siteId: string, raw: unknown, now = new Date()) {
   const site = await ownedSite(db, userId, siteId);
   const action = workbenchActionSchema.parse(raw);
-  if (action.action === "start") { assertKeywordRequest(action); assertResearchRequest(action); }
+  const hostedDeviceId = await hostedRequestDeviceId(userId!);
+  if (action.action === "start" && hostedDeviceId && !await hostedWorkerStatus(db, userId!)) {
+    throw new ContentError("Sign in to ChatGPT in this desktop's local worker before starting a task.", 409);
+  }
+  if (action.action === "start") {
+    if (!managedAllows("codex")) throw new ContentError("managed_restricted", 403);
+    assertKeywordRequest(action); assertResearchRequest(action);
+  }
   let connectionEpoch: number | undefined;
-  if (action.action === "start" && action.provider === "CHATGPT_APP") {
+  if (action.action === "start" && action.provider === "CHATGPT_APP" && !hostedMode()) {
     if (!action.planOnlyConfirmed) throw new ContentError("Confirm in ChatGPT usage settings that credit overage is disabled before generating", 409);
     if (!action.profileId || !action.model) throw new ContentError("Select a connected ChatGPT app account and model first", 409);
     connectionEpoch = (await assertPlanConnection(userId!, action.profileId)).epoch;
@@ -118,13 +147,19 @@ export async function runWorkbenchAction(db: WorkbenchDb, userId: string | undef
     await tx.$queryRaw(Prisma.sql`SELECT "id" FROM "Site" WHERE "id" = ${siteId} FOR UPDATE`);
     await expireWorkbenchJobs(tx, now, siteId);
     if (action.action === "start") {
-      const worker = await tx.contentWorkerState.findFirst({ where: { lastSeenAt: { gt: new Date(now.getTime() - WORKER_ONLINE_MS) } } });
+      const worker = await tx.contentWorkerState.findFirst({ where: { ...(hostedDeviceId ? { id: `hosted:${hostedDeviceId}` } : {}), lastSeenAt: { gt: new Date(now.getTime() - WORKER_ONLINE_MS) } } });
       if (!worker) throw new ContentError("The local ChatGPT account worker is offline. Start the local content worker and sign in with ChatGPT.", 409);
       if (await tx.aiWorkbenchJob.count({ where: { siteId, status: { in: ["QUEUED", "RUNNING"] } } })) throw new ContentError("This site already has an active workbench task", 409);
       const { action: _action, connectionEpoch: _untrustedEpoch, ...requestInput } = action;
-      const request = workbenchRequestSchema.parse({ ...requestInput, ...(connectionEpoch !== undefined ? { connectionEpoch } : {}) });
+      const request = workbenchRequestSchema.parse({ ...requestInput, ...(hostedMode() ? { provider: "CODEX_LOCAL", profileId: undefined, model: undefined } : {}), ...(connectionEpoch !== undefined ? { connectionEpoch } : {}) });
       const context = await buildContext(tx, site, request, now);
-      const job = await tx.aiWorkbenchJob.create({ data: { id: `aw_${randomUUID()}`, siteId, kind: request.kind, title: request.title, request: json(request), context: json(context), activeKey: siteId, createdAt: now, updatedAt: now } });
+      const jobId = `aw_${randomUUID()}`;
+      if (request.provider === "CODEX_LOCAL" && "reportEvidence" in context && context.reportEvidence) {
+        // The real lease uses a UUID and ISO timestamp of these same lengths.
+        buildReportWorkerClaim(request, context.reportEvidence, { jobId, leaseToken: "0".repeat(36), leaseExpiresAt: now.toISOString() });
+      }
+      if (!managedAllows("codex")) throw new ContentError("managed_restricted", 403);
+      const job = await tx.aiWorkbenchJob.create({ data: { id: jobId, siteId, hostedDeviceId, kind: request.kind, title: request.title, request: json(request), context: json(context), activeKey: siteId, createdAt: now, updatedAt: now } });
       return { jobId: job.id };
     }
     const job = await tx.aiWorkbenchJob.findFirst({ where: { id: action.jobId, siteId } });

@@ -31,6 +31,7 @@ import {
 import { DisconnectGoogleDialog } from "@/components/account/account-actions";
 import { formatDay } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { GoogleConnection as DesktopGoogleConnection } from "@/components/sites/google-connection";
 import type { ApiKeyProvider as KeyProvider, ApiKeyStatus } from "@/lib/api-keys";
 
 // The key form stops at a reading width: the content area grows to 1600 px, and a key field as wide as that
@@ -45,6 +46,7 @@ export type GoogleConnection = {
   scopes: string[];
   /** True when the stored tokens are encrypted. */
   sealed: boolean;
+  desktop?: boolean;
 };
 
 const GSC_SCOPE = "https://www.googleapis.com/auth/webmasters.readonly";
@@ -226,6 +228,19 @@ function RowHead({
 }
 
 function GoogleRow({ google }: { google: GoogleConnection }) {
+  if (google.desktop) return <DesktopGoogleRow google={google} />;
+  return <WebGoogleRow google={google} />;
+}
+
+function DesktopGoogleRow({ google }: { google: GoogleConnection }) {
+  const router = useRouter();
+  return <li className="px-5 py-4" data-provider="google" id="connection-google">
+    <DesktopGoogleConnection onConnected={() => router.refresh()} />
+    {google.connected && <div className="mt-3"><DisconnectGoogleDialog /></div>}
+  </li>;
+}
+
+function WebGoogleRow({ google }: { google: GoogleConnection }) {
   const ui = useUiText();
   const [showDetails, setShowDetails] = useState(false);
   const [connecting, setConnecting] = useState(false);

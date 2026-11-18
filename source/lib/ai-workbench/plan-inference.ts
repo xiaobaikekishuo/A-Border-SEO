@@ -9,6 +9,9 @@ import { assertKeywordRequest } from "./keyword-research";
 import { assertResearchRequest } from "./research-analysis";
 import { buildWorkbenchPrompt, runWorkbenchLease } from "./worker";
 import { planError, planRequest, readPlanResponse } from "./plan-response";
+import { managedAllows, managedDecision } from "@/lib/managed/policy";
+import { desktopMaintenanceActive } from "@/lib/desktop/maintenance";
+import { managedOwnerAllows } from "@/lib/managed/identity";
 
 const requestSchema = z.object({ jobId: z.string().regex(/^aw_[a-zA-Z0-9_-]{1,90}$/), leaseToken: z.string().min(16).max(200) }).strict();
 export async function runPlanInference(raw: unknown, requestSignal: AbortSignal) {
@@ -17,6 +20,11 @@ export async function runPlanInference(raw: unknown, requestSignal: AbortSignal)
     leaseExpiresAt: { gt: new Date() }, startedAt: { gt: new Date(Date.now() - RUN_TIMEOUT_MS) } });
   const job = await db.aiWorkbenchJob.findFirst({ where: leaseWhere(), include: { site: { select: { userId: true } } } });
   if (!job) throw new ContentError("Job lease is no longer valid", 409);
+  const decision = managedDecision();
+  if (!decision.allowed || !decision.features.codex || (decision.enabled && !job.executionAuthorizedAt)
+    || !await managedOwnerAllows(db, job.site.userId)) {
+    throw new ContentError("The management policy paused this job.", 403);
+  }
   const request = workbenchRequestSchema.parse(job.request);
   assertKeywordRequest(request);
   assertResearchRequest(request);
@@ -27,30 +35,38 @@ export async function runPlanInference(raw: unknown, requestSignal: AbortSignal)
   const abort = new AbortController();
   const signal = AbortSignal.any([requestSignal, abort.signal, AbortSignal.timeout(510000)]);
   const userId = job.site.userId; const profileId = request.profileId;
+  async function verifyLease() {
+    signal.throwIfAborted();
+    if (!await db.aiWorkbenchJob.findFirst({ where: leaseWhere(), select: { id: true } })) throw new ContentError("Job lease is no longer valid", 409);
+    if (!await managedOwnerAllows(db, userId)) throw new ContentError("The management policy paused this job.", 403);
+    await assertPlanConnection(userId, profileId, request.connectionEpoch);
+    signal.throwIfAborted();
+  }
   let checking = false;
   const timer = setInterval(async () => {
     if (checking) return; checking = true;
     try {
-      if (!await db.aiWorkbenchJob.findFirst({ where: leaseWhere(), select: { id: true } })) throw new Error("lease_ended");
-      await assertPlanConnection(userId, profileId, request.connectionEpoch);
+      await verifyLease();
     } catch { abort.abort(); } finally { checking = false; }
   }, 5000);
   try {
     const token = await getPlanAccessToken(userId, profileId, request.connectionEpoch);
     const models = await listPlanModels(token);
     if (!models.some(model => model.slug === request.model)) throw new ContentError("Selected model is not in this ChatGPT account's current model list. Refresh models and start a new task.", 409);
-    await assertPlanConnection(userId, profileId, request.connectionEpoch);
-    signal.throwIfAborted();
+    await verifyLease();
+    if (!managedAllows("codex") || desktopMaintenanceActive()) {
+      throw new ContentError("The management policy paused this job.", 403);
+    }
     const response = await openaiFetch("https://api.openai.com/v1/responses", {
       method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, redirect: "error", cache: "no-store", signal,
-      body: JSON.stringify(planRequest(request.model, buildWorkbenchPrompt(request, job.context), z.toJSONSchema(generationSchemaFor(request.kind), { target: "draft-7" }))),
+      body: JSON.stringify(planRequest(request.model, buildWorkbenchPrompt(request, job.context), z.toJSONSchema(generationSchemaFor(request.kind, request.actionScope), { target: "draft-7" }))),
     });
     const result = await readPlanResponse(response, signal, async usage => {
       // Usage belongs to this single inference, even if its draft later fails validation
       // or the user canceled. No status, draft, connection or lease is changed here.
       await db.aiWorkbenchJob.updateMany({ where: { id: job.id, siteId: job.siteId }, data: { usage } });
     });
-    await assertPlanConnection(userId, profileId, request.connectionEpoch);
+    await verifyLease();
     await runWorkbenchLease(db, { action: "complete", ...input, result }, new Date());
     return { ok: true };
   } catch (error) {

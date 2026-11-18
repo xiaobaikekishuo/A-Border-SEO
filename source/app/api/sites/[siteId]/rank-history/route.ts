@@ -37,20 +37,12 @@ export async function GET(
 
     // Fetch from both Keyword table and RankSnapshot in parallel
     const [keywordRows, snapshots] = await Promise.all([
-      db.keyword.findMany({
-        where: {
-          siteId,
-          query,
-          date: { gte: startDate },
-        },
-        select: {
-          date: true,
-          position: true,
-          clicks: true,
-          impressions: true,
-        },
-        orderBy: { date: "asc" },
-      }),
+      db.$queryRaw<Array<{ date: Date; position: number; clicks: number; impressions: number }>>`
+        SELECT k.date, k.position, k.clicks, k.impressions FROM "Keyword" k
+        JOIN "GscSyncCoverage" c ON c."siteId" = k."siteId" AND c.date = k.date AND c."queryPagesComplete"
+        JOIN "Site" s ON s.id = c."siteId" AND s."gscProperty" = c."gscProperty"
+        WHERE k."siteId" = ${siteId} AND k.query = ${query} AND k.date >= ${startDate}
+        ORDER BY k.date`,
       db.rankSnapshot.findMany({
         where: {
           siteId,

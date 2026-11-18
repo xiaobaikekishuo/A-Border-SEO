@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>A-Border SEO 客户端下载 · 软件发布</title>
+  <meta name="description" content="下载 A-Border SEO 的 Windows 桌面客户端，查看 Google 与 Bing 搜索表现、审计站点并规划内容。">
+  <link rel="canonical" href="https://nxitek.cn/software/seo/">
+  <link rel="icon" type="image/png" href="{{icon}}">
+  <link rel="stylesheet" href="{{css}}">
+</head>
+<body>
+  <header><div class="wrap mast">
+    <a href="/" aria-label="A-Border 官网首页"><img class="logo" src="{{logo}}" alt="A-Border"></a>
+    <nav aria-label="网站导航"><a href="/">官网首页</a><a href="/software/">软件发布</a></nav>
+  </div></header>
+  <main class="wrap">
+    <section class="hero" aria-labelledby="product">
+      <div class="intro">
+        <p class="version"><span aria-hidden="true"></span>Windows 客户端 · v{{version}}</p>
+        <h1 id="product" lang="en">A-Border SEO</h1>
+        <p class="lead">从搜索表现到内容规划，在一个工作台里查看 Google 与 Bing 数据、排查网站问题，并安排下一步优化。</p>
+        <a class="cta" href="{{url}}" download="{{name}}">下载 Windows 安装包（.exe）<span aria-hidden="true">↓</span></a>
+        <p class="spec">Windows x64 <span>·</span> {{size}} MiB <span>·</span> {{signature}}</p>
+      </div>
+      <figure class="illustration">
+        <div class="board" aria-hidden="true">
+          <div class="board-head"><div class="board-title"><img src="{{icon}}" alt="">站点概览</div><span>最近 7 天</span></div>
+          <div class="metric"><span>搜索点击量</span><strong>65</strong></div>
+          <div class="chart"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+          <div class="axis"><span>周一</span><span>周日</span></div>
+        </div>
+        <figcaption>搜索趋势示意 · 使用示例数据</figcaption>
+      </figure>
+    </section>
+    <div class="info">
+      <section class="functions" aria-labelledby="features">
+        <h2 id="features">工作台功能</h2>
+        <dl>
+          <div><dt>搜索表现</dt><dd>查看 Search Console 与 Bing 站长工具的搜索词、页面、曝光与点击趋势。</dd></div>
+          <div><dt>站点诊断</dt><dd>结合抓取审计、网页性能和 GEO 监测，定位具体页面并核对问题来源。</dd></div>
+          <div><dt>内容规划</dt><dd>从关键词建议挑选选题，组织主题与写作简报。连接本机 Codex 后，可用自己的 ChatGPT 账号额度分析已保存的报表。</dd></div>
+        </dl>
+      </section>
+      <section class="install" aria-labelledby="start">
+        <h2 id="start">安装与使用</h2>
+        <ol>
+          <li><strong>下载安装包</strong><p><a class="installer-file" href="{{url}}" download="{{name}}">{{name}}</a></p><p>下载完成后，双击该文件安装。升级时请先退出旧版。</p></li>
+          <li><strong>注册并登录</strong><p>首次使用请在客户端创建账号，管理员批准后即可进入工作台。已有账号可直接登录。</p></li>
+          <li><strong>联网进入站点工作台</strong><p>后台服务在服务器上运行，电脑无需安装 Docker。进入后可添加网站并连接数据源。</p></li>
+        </ol>
+        <details><summary>签名与文件校验</summary>
+          <p>在安装包所在目录打开 PowerShell，运行以下命令，将结果与下方的 SHA-256 比对。</p>
+          <p class="file"><samp>Get-FileHash -Algorithm SHA256 -LiteralPath '.\{{name}}'</samp></p>
+          <code>{{digest}}</code>
+          <a href="{{url}}.sha256" download="{{name}}.sha256">下载 SHA-256 校验文件</a>
+        </details>
+      </section>
+    </div>
+  </main>
+  <footer><div class="wrap"><span>A-Border 科技</span><a href="/software/">返回软件发布 <span aria-hidden="true">↗</span></a></div></footer>
+</body>
+</html>

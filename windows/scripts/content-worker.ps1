@@ -42,6 +42,7 @@ catch { Write-ContentLog $runtime 'worker_failed' '' 'invalid_config'; exit 1 }
 $statePath = Join-Path $runtime 'worker.json'
 $childPath = Join-Path $runtime 'child.json'
 $stopPath = Join-Path $runtime "stop-$InstanceId"
+$drainPath = Join-Path $runtime "drain-$InstanceId"
 $workerId = "local-$InstanceId"
 $scriptPath = $PSCommandPath
 $lock = $null
@@ -59,15 +60,24 @@ try {
     $null = Invoke-ContentApi $token @{ action = 'heartbeat'; workerId = $workerId }
     Write-ContentState $statePath (Get-ContentProcessRecord (Get-Process -Id $PID) $scriptPath $InstanceId)
     Write-ContentLog $runtime 'worker_started'
+    $managedProtocol = $false
     do {
-        if (Test-Path -LiteralPath $stopPath) { break }
+        if ((Test-Path -LiteralPath $stopPath) -or (Test-Path -LiteralPath $drainPath)) { break }
         try {
-            $claim = Invoke-ContentApi $token @{ action = 'claim'; workerId = $workerId }
+            $claimInput = @{ action = 'claim'; workerId = $workerId }
+            if ($managedProtocol) { $claimInput.protocolVersion = 2 }
+            $claim = Invoke-ContentApi $token $claimInput
+            if (-not $managedProtocol -and $claim.PSObject.Properties['managedProtocol'] -and $claim.managedProtocol -eq 2) {
+                $claimInput.protocolVersion = 2
+                $claim = Invoke-ContentApi $token $claimInput
+            }
+            $managedProtocol = $claim.PSObject.Properties['managedProtocol'] -and $claim.managedProtocol -eq 2
             if ($claimApiUnavailable) {
                 Write-ContentLog $runtime 'worker_api_recovered'
                 $claimApiUnavailable = $false
             }
         } catch {
+            $managedProtocol = $false
             # Retry only idle Watch polling. No claimed job or model invocation
             # is repeated by this branch; Once and startup failures still exit.
             if (-not $Watch -or $_.Exception.Message -cne 'worker_api_failed') { throw }
@@ -76,7 +86,7 @@ try {
                 $claimApiUnavailable = $true
             }
             for ($i = 0; $i -lt 20; $i++) {
-                if (Test-Path -LiteralPath $stopPath) { break }
+                if ((Test-Path -LiteralPath $stopPath) -or (Test-Path -LiteralPath $drainPath)) { break }
                 Start-Sleep -Milliseconds 250
             }
             continue
@@ -100,6 +110,10 @@ try {
                     }
                 }
                 if ($job.PSObject.Properties['provider'] -and $job.provider -ceq 'CHATGPT_APP') {
+                    if ($managedProtocol) {
+                        $permit = Invoke-ContentApi $token @{ action = 'begin'; jobId = $jobId; leaseToken = $job.leaseToken }
+                        if ($permit.allowed -ne $true) { continue }
+                    }
                     $completed = Invoke-ContentPlanRequest $token $jobId $job.leaseToken $JobTimeoutSeconds $tick
                     if ($completed) { Write-ContentLog $runtime 'app_job_completed' $jobId }
                     else { Write-ContentLog $runtime 'app_job_failed' $jobId; if (-not $Watch) { $failed = $true } }
@@ -140,6 +154,10 @@ Complete the requested content planning, article writing, article rewrite, or SE
                 }
                 $arguments = Get-ContentCodexArguments $jobDirectory
                 $info = New-ContentCodexStartInfo $jobCodexExe $Root $jobDirectory $arguments
+                if ($managedProtocol) {
+                    $permit = Invoke-ContentApi $token @{ action = 'begin'; jobId = $jobId; leaseToken = $job.leaseToken }
+                    if ($permit.allowed -ne $true) { continue }
+                }
                 $execution = Invoke-ContentCodexProcess $info $prompt $JobTimeoutSeconds $tick $onStart $onPartialOutput
                 $cliSummary = Get-ContentCliSummary $execution.stdout
                 $usageCapture.value = $cliSummary.reportedUsage
@@ -173,7 +191,7 @@ Complete the requested content planning, article writing, article rewrite, or SE
         }
         if ($Watch) {
             for ($i = 0; $i -lt 20; $i++) {
-                if (Test-Path -LiteralPath $stopPath) { break }
+                if ((Test-Path -LiteralPath $stopPath) -or (Test-Path -LiteralPath $drainPath)) { break }
                 Start-Sleep -Milliseconds 250
             }
         }
@@ -186,7 +204,7 @@ Complete the requested content planning, article writing, article rewrite, or SE
 } finally {
     $token = $null
     if ($lock) {
-        foreach ($path in @($statePath, $stopPath)) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }
+        foreach ($path in @($statePath, $stopPath, $drainPath)) { if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force } }
         $lock.Dispose()
         Write-ContentLog $runtime 'worker_stopped'
     }

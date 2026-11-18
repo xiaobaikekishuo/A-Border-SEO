@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join, resolve } from "path";
 import { describe, expect, it } from "vitest";
 
@@ -46,7 +46,7 @@ function externalHosts(source: string): string[] {
 }
 
 function isTestFile(path: string): boolean {
-  return /\.test\.(ts|tsx)$/.test(path) || path.startsWith("lib/testing/") || path.endsWith(".d.ts");
+  return /\.test\.(ts|tsx|mjs)$/.test(path) || path.startsWith("lib/testing/") || path.endsWith(".d.ts");
 }
 
 function sourceFiles(dir: string): string[] {
@@ -60,7 +60,8 @@ function sourceFiles(dir: string): string[] {
 
 /** Code in the scanned folders and at the repository root (next.config.ts, instrumentation.ts). */
 function allSourceFiles(): string[] {
-  return [...sourceFiles(""), ...DIRS.flatMap((dir) => sourceFiles(dir))];
+  const desktop = existsSync(join(ROOT, "../desktop")) ? sourceFiles("../desktop") : [];
+  return [...sourceFiles(""), ...DIRS.flatMap((dir) => sourceFiles(dir)), ...desktop];
 }
 
 describe("outbound hosts", () => {

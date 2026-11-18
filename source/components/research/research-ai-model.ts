@@ -12,6 +12,15 @@ export type ResearchWorkspace = {
   site: { id: string; domain: string }; worker: { online: boolean }; jobs: ResearchJob[];
   activeTask?: { id: string; kind: string; title: string } | null;
 };
+export function researchConnectionReady(execution: AccountExecution) {
+  return execution.ready && (execution.provider === "CODEX_LOCAL" ||
+    (!!execution.profileId && !!execution.model && execution.planOnlyConfirmed === true));
+}
+export function researchConnectionFields(execution: AccountExecution) {
+  if (execution.provider === "CODEX_LOCAL") return { provider: execution.provider };
+  return { provider: execution.provider, profileId: execution.profileId, model: execution.model,
+    planOnlyConfirmed: execution.planOnlyConfirmed === true };
+}
 export function backlinkSampleShape(body: string): "length" | "rows" | "columns" | null {
   if (body.length > 24000) return "length";
   const rows = body.split(/\r?\n/).filter(row => row.trim());
@@ -22,15 +31,13 @@ export function backlinkSampleShape(body: string): "length" | "rows" | "columns"
 export function canGenerateResearch(kind: ResearchKind, input: ResearchInput, execution: AccountExecution, state: {
   online: boolean; active: boolean; busy: boolean; loading: boolean; uncertain: boolean;
 }) {
-  return execution.ready && execution.provider === "CHATGPT_APP" && !!execution.profileId && !!execution.model
-    && execution.planOnlyConfirmed === true && state.online && !state.active && !state.busy && !state.loading && !state.uncertain
+  return researchConnectionReady(execution) && state.online && !state.active && !state.busy && !state.loading && !state.uncertain
     && input.title.trim().length > 0 && input.title.trim().length <= 250
     && input.targetMarket.trim().length > 0 && input.targetMarket.trim().length <= 120 && input.instructions.length <= 6000
     && (kind !== "BACKLINK_ANALYSIS" || backlinkSampleShape(input.body) === null);
 }
 export function researchTaskPayload(kind: ResearchKind, input: ResearchInput, execution: AccountExecution) {
-  return { action: "start", kind, provider: "CHATGPT_APP", profileId: execution.profileId, model: execution.model,
-    planOnlyConfirmed: execution.planOnlyConfirmed === true, title: input.title.trim(), language: input.language,
+  return { action: "start", kind, ...researchConnectionFields(execution), title: input.title.trim(), language: input.language,
     instructions: input.instructions.trim(), researchAnalysis: { targetMarket: input.targetMarket.trim() },
     ...(kind === "BACKLINK_ANALYSIS" && input.body.trim() ? { body: input.body.trim() } : {}) };
 }

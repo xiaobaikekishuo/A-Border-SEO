@@ -6,6 +6,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/ui/page-header";
 import { DeleteSiteButton } from "@/components/sites/delete-site-button";
 import { BingSiteSection } from "@/components/settings/bing-site-section";
+import { GscSiteSection } from "@/components/settings/gsc-site-section";
 import { formatDay } from "@/lib/format";
 
 interface Props {
@@ -82,6 +83,8 @@ export default async function SettingsPage({ params }: Props) {
             </div>
           </dl>
         </div>
+
+        <GscSiteSection siteId={siteId} domain={site.domain} gscProperty={site.gscProperty} />
 
         {/* Bing Webmaster property: only with a Bing key */}
         {bingKey ? (

@@ -6,6 +6,7 @@ import { comparableDomain, isPublicDomainName } from "@/lib/site-domain";
 import { visibleIssuesWhere } from "@/lib/crawler/issue-filter";
 import { auditIssueDisplayType } from "@/lib/crawler/audit-policy";
 import { dateWindow } from "@/lib/date-utils";
+import { assertResearchProvider, fitResearchContext, sampleResearchRows, sampleResearchSearch } from "./research-context";
 import type { WorkbenchRequest, WorkbenchResult } from "./schema";
 
 export type ResearchKind = "DOMAIN_ANALYSIS" | "BACKLINK_ANALYSIS";
@@ -28,7 +29,7 @@ export function assertResearchRequest(input: WorkbenchRequest) {
     if (input.researchAnalysis) throw new ContentError("Research analysis settings require a research analysis task");
     return;
   }
-  if (input.provider !== "CHATGPT_APP") throw new ContentError("Research analysis requires a connected ChatGPT app account", 409);
+  assertResearchProvider(input.provider);
   if (!input.researchAnalysis) throw new ContentError("Provide the target market and audience for this research task");
   if (input.keyword || input.keywordResearch || input.pageId || input.clusterId || input.diagnosis) throw new ContentError("Research analysis uses this site's saved evidence and optional backlink samples only");
   if (input.kind === "DOMAIN_ANALYSIS" && input.body) throw new ContentError("Pasted backlink samples are only supported for backlink analysis");
@@ -127,8 +128,18 @@ export async function buildResearchContext(tx: Prisma.TransactionClient, site: {
         message: issue.message.slice(0, 1000), disposition: policy?.disposition === "unverified" ? "unverified" : "observed" };
     }),
   };
-  if (JSON.stringify(context).length > 140000) throw new ContentError("Research evidence is too large. Reduce the pasted backlink sample.");
-  return context;
+  return fitResearchContext(input, context, researchAnalysisPrompt, divisor => {
+    const pages = sampleResearchRows(researchEvidence.pages, divisor);
+    const allowedInternalLinks = pages.map(page => page.url);
+    const sampledOutgoing = sampleResearchRows(outgoing, divisor);
+    const sampledPasted = sampleResearchRows(pasted, divisor);
+    const pageIds = new Set(pages.map(page => page.id));
+    return { ...context, allowedInternalLinks, researchEvidence: { ...researchEvidence, pages, links: [...sampledOutgoing, ...sampledPasted],
+        counters: { ...researchEvidence.counters, sampledPages: pages.length, sampledOutgoingLinks: sampledOutgoing.length, backlinkSample: sampledPasted.length },
+        limitations: [...researchEvidence.limitations, "Worker input size limited the sample. The report covers only the included evidence IDs."] },
+      searchEvidence: searchEvidence && sampleResearchSearch(searchEvidence, new Set(allowedInternalLinks), divisor),
+      issueEvidence: sampleResearchRows(context.issueEvidence, divisor).map(issue => ({ ...issue, pageId: issue.pageId && pageIds.has(issue.pageId) ? issue.pageId : null })) };
+  });
 }
 
 export function researchAnalysisPrompt(input: WorkbenchRequest, context: unknown) {

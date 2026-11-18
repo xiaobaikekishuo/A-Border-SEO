@@ -8,6 +8,7 @@ playwright-report/
 dist/
 build/
 *.tsbuildinfo
+desktop/release-manifest.json
 
 # Instance secrets and authentication
 .env
@@ -17,6 +18,8 @@ build/
 codex/
 auth.json
 private/
+/scripts/capture-hosted-migration-secrets.mjs
+/scripts/cutover-hosted-snapshots.mjs
 *.dpapi
 *.pem
 *.key

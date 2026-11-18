@@ -1,10 +1,14 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type PrismaClient } from "@prisma/client";
 import { createTestDb, type TestDb } from "@/lib/testing/pglite";
 import { getWorkbenchWorkspace, runWorkbenchAction } from "./data";
 import { runWorkerAction } from "@/lib/content-planner/worker";
 import { validateWorkbenchResult } from "./worker";
+import * as evidenceService from "./action-evidence";
+import { REPORT_CLAIM_TOO_LARGE } from "./report-claim";
+import { workbenchRequestSchema } from "./schema";
 
+const { actionEvidenceRevision, collectActionEvidence } = evidenceService;
 let database: TestDb; let db: PrismaClient;
 const now = new Date("2026-11-05T04:00:00Z");
 const user = "aw-owner"; const site = "aw-site"; const url = "https://workbench.example/guide";
@@ -39,6 +43,70 @@ async function finish() {
   return db.aiWorkbenchJob.findUniqueOrThrow({ where: { id } });
 }
 describe("local account workbench", () => {
+  it("delivers the reviewed evidence exactly once within the released worker's serialized claim limit", async () => {
+    const testSite = { id: "wide-report", domain: "report.example" };
+    const property = "sc-domain:report.example";
+    const date = new Date("2026-11-01T00:00:00Z");
+    const pageUrl = (source: string, i: number) => `https://report.example/${source}${i}/`.padEnd(510, "a");
+    await db.site.create({ data: { ...testSite, userId: user, gscProperty: property, bingSite: "https://report.example/" } });
+    await db.crawl.create({ data: { id: "wide-crawl", siteId: testSite.id, status: "COMPLETED", finishedAt: now } });
+    await db.crawlIssue.createMany({ data: Array.from({ length: 8 }, (_, i) => ({ crawlId: "wide-crawl",
+      url: pageUrl("audit", i), type: "MISSING_TITLE" as const, severity: "WARNING" as const, message: "Missing title" })) });
+    await db.vitalsReport.createMany({ data: Array.from({ length: 10 }, (_, i) => ({ siteId: testSite.id,
+      url: pageUrl("vitals", i), date: now, device: "MOBILE", lcp: 4.0 })) });
+    await db.gscSyncCoverage.create({ data: { siteId: testSite.id, gscProperty: property, date, pagesComplete: true } });
+    await db.page.createMany({ data: Array.from({ length: 5 }, (_, i) => ({ siteId: testSite.id, date, url: pageUrl("gsc", i), clicks: 1, impressions: 5 })) });
+    await db.bingSearchWeekly.createMany({ data: Array.from({ length: 5 }, (_, i) => ({ siteId: testSite.id, weekEnding: date,
+      kind: "page", key: pageUrl("bing", i), clicks: 2, impressions: 4 })) });
+    const evidence = await collectActionEvidence(db, testSite, "weekly", now);
+    expect(JSON.stringify(JSON.stringify(evidence)).length).toBeGreaterThan(17_000);
+    const input = workbenchRequestSchema.parse({ provider: "CODEX_LOCAL", kind: "SEO_FIX_PLAN", title: "Weekly actions",
+      actionScope: "weekly", instructions: "\u0001".repeat(6000), evidenceRevision: actionEvidenceRevision(evidence) });
+    // Simulate a future report collector returning a larger preview. The API
+    // must reject it before the job is queued, with all earlier rows retained.
+    const oversized = { ...evidence, sections: [...evidence.sections, { source: "alerts", rows: [{ kind: "lastAlertTrigger", issue: "x".repeat(66_000) }] }] };
+    const largePreview = vi.spyOn(evidenceService, "collectActionEvidence").mockResolvedValueOnce(oversized);
+    try {
+      await expect(runWorkbenchAction(db, user, testSite.id, { ...input, action: "start", evidenceRevision: actionEvidenceRevision(oversized) }, now))
+        .rejects.toMatchObject({ message: REPORT_CLAIM_TOO_LARGE, status: 422 });
+      expect(await db.aiWorkbenchJob.count({ where: { siteId: testSite.id } })).toBe(0);
+    } finally { largePreview.mockRestore(); }
+    const result = await runWorkbenchAction(db, user, testSite.id, { ...input, action: "start" }, now);
+    const job = await claim();
+    expect(result).toEqual({ jobId: job.jobId });
+    const localEnvelope = (prompt: string) => JSON.stringify({ managedProtocol: 2, job: { ...job, prompt } }).length;
+    const knownUrls = evidence.sections.flatMap(s => s.rows.flatMap(row => typeof row.url === "string" ? [row.url] : []));
+    const repeatedUrlsEnvelope = localEnvelope(job.prompt + JSON.stringify({ allowedInternalLinks: knownUrls }));
+    expect(repeatedUrlsEnvelope).toBeGreaterThan(65_536);
+    expect(localEnvelope(job.prompt)).toBeLessThanOrEqual(65_536);
+    expect(JSON.parse(job.prompt.split("\nEVIDENCE:\n")[1])).toEqual({ reportEvidence: evidence });
+    expect(JSON.parse(job.prompt.split("\nUSER REQUEST:\n")[1].split("\nEVIDENCE:\n")[0]).instructions).toBe(input.instructions);
+  });
+  it("binds a reviewed report to its owner and delivers traceable recommendations through the existing lease", async () => {
+    const evidence = await collectActionEvidence(db, { id: site, domain: "workbench.example" }, "audit", now);
+    const request = { action: "start", provider: "CODEX_LOCAL", kind: "SEO_FIX_PLAN", title: "Audit priorities",
+      actionScope: "audit", evidenceRevision: actionEvidenceRevision(evidence) };
+    expect(evidence.hasData).toBe(true);
+    await expect(start({ ...request, evidenceRevision: "a".repeat(64) })).rejects.toMatchObject({ status: 409 });
+    await expect(start({ ...request, kind: "WRITE_ARTICLE" })).rejects.toMatchObject({ status: 400 });
+    await expect(runWorkbenchAction(db, "aw-other", site, request, now)).rejects.toMatchObject({ status: 404 });
+    expect(await db.aiWorkbenchJob.count()).toBe(0);
+    const id = await start(request);
+    const job = await claim();
+    expect(job.prompt).toContain("Audit priorities");
+    expect(job.prompt).not.toContain("Never share this foreign page body");
+    expect(job.outputSchema).toHaveProperty("properties.reportActions");
+    const base = { ...result(), internalLinks: [], paragraphEdits: [], reportActions: [
+      { title: "Review this crawl", reason: "Based on the most recent crawl sample.", nextStep: "Review the recorded issues.", verify: "Repeat the crawl.", evidenceRefs: ["audit:1"] },
+    ] };
+    const complete = (value: unknown) => runWorkerAction(db, { action: "complete", jobId: id, leaseToken: job.leaseToken, result: value }, now);
+    await expect(complete({ ...base, reportActions: [{ ...base.reportActions[0], evidenceRefs: ["audit:999"] }] })).rejects.toThrow("cite rows");
+    await expect(complete({ ...base, reportActions: [{ ...base.reportActions[0], reason: "See https://other.example/secret" }] })).rejects.toThrow();
+    await complete(base);
+    const history = await getWorkbenchWorkspace(db, user, site, now);
+    expect(history.jobs[0].result?.reportActions).toEqual(base.reportActions);
+    expect(history.jobs[0].reportSources).toMatchObject([{ ref: "audit:1", source: "audit" }]);
+  });
   it("rejects anonymous and foreign owners and cross-site source IDs", async () => {
     await expect(getWorkbenchWorkspace(db, null, site, now)).rejects.toMatchObject({ status: 401 });
     await expect(runWorkbenchAction(db, "aw-other", site, input, now)).rejects.toMatchObject({ status: 404 });

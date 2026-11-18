@@ -15,7 +15,7 @@ Search Console 数据、全站抓取审计、网页性能、AI 爬虫访问与 A
 | 模块 | 内容 |
 |---|---|
 | **Search Console 分析** | 关键词、页面、点击、曝光、平均排名和 CTR，最近 28 天与前 28 天对比；已保存关键词与备注；CSV 导出 |
-| **Bing Webmaster** | 使用你自己的 Bing API Key，同步查询、页面和抓取统计 |
+| **Bing Webmaster** | 使用自己的 Bing API Key，同步流量、查询、页面与抓取统计，并在独立 Bing 报表中查看趋势和明细 |
 | **抓取与审计** | 默认每次最多 2000 页（`CRAWL_MAX_PAGES`），并发抓取；16 类问题与修复建议、内容评分、结构化数据检查；健康分按受影响页面占比计分 |
 | **网页性能** | 通过 PageSpeed Insights 检查 LCP、CLS、INP、TTFB，移动端与桌面端分开 |
 | **AI 爬虫访问** | 按 RFC 9309 逐个判断 19 个与 AI 搜索、模型训练和用户触发访问相关的爬虫能否访问，并读取 robots.txt 中的 Content-Signal 与 Content-Usage 声明 |
@@ -104,6 +104,8 @@ Compose 会用本目录的 `Dockerfile` 构建镜像，然后启动三个服务�
 `WORKER_MODE` 决定由谁执行任务：Docker Compose 中应用为 `off`、`worker` 服务为 `worker`；单进程运行（`npm start`）时默认 `inline`，由应用自己执行。停止 worker 时，正在进行的同步会在 `WORKER_SHUTDOWN_GRACE_SECONDS`（默认 25 秒）内完成，正在进行的抓取放回队列。
 
 **定时任务**：每个站点每天同步 Search Console（配置了 Bing 时也同步 Bing），同步后评估提醒；每周抓取一次、检查一次网页性能；设置了定期运行的站点按其间隔运行提示词跟踪。第一次的定时抓取和性能检查分散在第一周内进行。间隔由 `SCHEDULE_*` 设置（0 关闭某一项），`SCHEDULER_ENABLED=false` 关闭全部；每个用户也可以在 **设置 → 定时任务** 为自己的站点单独调整。
+
+**Bing 报表**：进入网站后，在左侧选择 **Bing 报表**。首次使用先保存账号 API Key，再选择主机名与当前网站一致的已验证 Bing 资源，保存后点击 **同步 Bing**。报表支持最近 28、90、180 天，按 UTC 日期截至昨天；日数据缺失不填零，收录量使用区间最近快照。关键词和页面按周结束日期筛选，边界为近似范围；每个维度最多展示点击量最高的 500 条，并支持筛选、排序和分页。报表只读取已有数据，打开页面不会启动外部同步；同步失败或部分接口未返回时，会保留并标明现有数据。
 
 ## MCP
 
@@ -199,6 +201,8 @@ function verify(rawBody, headers, secret) {
 
 ## 数据与外部连接
 
+托管桌面版工作台连接 `aborder.tuitehao.shop`：使用设备凭据建立会话、访问本人业务数据，并协调本机内容 Worker。设备凭据只用于身份校验，不进入网页渲染进程。本地部署模式保留原有连接方式。
+
 所有站点、关键词、抓取结果和 Google 令牌都保存在你自己的 PostgreSQL 里，应用不发送使用统计。只有下列情况会访问外部服务：
 
 | 去向 | 什么时候 | 发送什么 | 如何关闭 |
@@ -212,6 +216,8 @@ function verify(rawBody, headers, secret) {
 | Bing Webmaster Tools（`ssl.bing.com`） | 只在添加了你自己的 Bing API Key 后；之后每天同步一次 | 针对你自己的 Bing 站点的请求 | 在 **设置 → 服务连接** 删除 Key，或 `SCHEDULE_BING_SYNC_HOURS=0` |
 | DataForSEO（`api.dataforseo.com`） | 只在添加了你自己的 DataForSEO Key 后：你执行的研究查询、确认后的提示词跟踪运行，以及你设置的定期运行 | 关键词和域名查询；提示词和站点的调研市场 | 在 **设置 → 服务连接** 删除 Key；定期运行改为“仅手动运行”或 `SCHEDULE_GEO_TRACKING=false` |
 | GitHub 发布接口（`api.github.com`） | 只在设置了 `UPDATE_CHECK_REPO` 时，每天一次 | 查询该仓库的最新发布版本，只带 User-Agent，不含任何你的数据 | 不设置 `UPDATE_CHECK_REPO`（默认），或 `UPDATE_CHECK=false` |
+| 桌面发行与下载（`github.com`、`api.github.com`、`release-assets.githubusercontent.com`、`objects.githubusercontent.com`） | 检查桌面更新或下载所选版本 | 发布元数据、清单与安装包的读取请求 | 关闭桌面自动检查，并按需手动检查和安装 |
+| GitHub 容器注册表（`ghcr.io`、`pkg-containers.githubusercontent.com`） | 首次配置或升级需要拉取后台镜像时 | 公开镜像名、摘要和镜像层请求 | 使用已有本地镜像的浏览器版 |
 | 你抓取的网站 | 开始抓取、点击 AI 爬虫访问检查或 GEO 访问检查时，以及每周的定时抓取 | 从你的服务器发出的普通 HTTP 请求，包括跳转到的地址；GEO 访问检查会以浏览器和各 AI 爬虫的 User-Agent 各请求一次 | 不开始抓取、不运行检查；定时抓取见上文 |
 | 你的 Webhook 与 SMTP 服务器 | 只在你配置后，提醒触发或点击发送测试时 | 触发的提醒（类型、内容、站点 ID 和域名） | 在设置中删除；或 `ALERT_WEBHOOKS_ENABLED=false`、`ALERT_EMAILS_ENABLED=false` |
 
@@ -225,9 +231,17 @@ function verify(rawBody, headers, secret) {
 |---|---|
 | `DATABASE_URL` | PostgreSQL 连接串（Docker Compose 会自动拼出） |
 | `NEXTAUTH_SECRET` | 会话密钥，同时加密保存的 API Key 和 Google 令牌（`openssl rand -hex 32`），生成后不要更改 |
-| `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` | Google OAuth 客户端 |
+| `GOOGLE_CLIENT_ID`、`GOOGLE_CLIENT_SECRET` | Google OAuth 客户端；传统自部署 Google 登录需要配置，受管客户端注册、登录和手动添加网站不需要 |
 
 常用的可选项：`NEXTAUTH_URL`、`DISABLE_REGISTRATION`、`CRAWL_MAX_PAGES`、`CRAWL_MAX_MINUTES`、`CRAWL_DETAIL_RETENTION`、`CRAWLER_USER_AGENT`、`GOOGLE_HTTP_PROXY`、`SCHEDULER_ENABLED`、`SCHEDULE_*`（含 `SCHEDULE_GEO_TRACKING`）、`WORKER_MODE`、`LOCAL_CONTENT_WORKER_TOKEN`、`LOCAL_APP_PORT`、`UPDATE_CHECK_REPO`。
+
+### 受管客户端连接 Google Search Console
+
+客户端的注册账号与 Google 数据授权独立。可以先手动添加网站，随后在添加网站、站点设置或“设置 → 服务连接”中连接 Google，再绑定自己有权限访问的 GSC 资源。授权只请求 Search Console 只读权限，在系统浏览器完成，不改变 A-Border SEO 登录账号或网站归属。
+
+管理员后台上线不会自动配置每台客户端的 Google OAuth。要启用此连接，需要为本地工作台配置自己的 `GOOGLE_CLIENT_ID` 和 `GOOGLE_CLIENT_SECRET`，并在对应 Google Web OAuth 客户端登记完整回调地址 `http://localhost:3300/api/auth/callback/google`，然后通过客户端重启服务载入配置。保留现有登录与 GA4 回调地址。部署者还需启用 Search Console API，并按照 Google 项目的测试用户或应用发布状态授予访问。不要把 Google 客户端私密配置提交到仓库。流程参考 [Google Web OAuth 文档](https://developers.google.com/identity/protocols/oauth2/web-server)。
+
+缺少配置时界面显示“尚未配置”，连接按钮不可用，手动添加网站仍可继续。配置正确后，授权请求用 PKCE、一次性状态及当前本地账号绑定；系统浏览器回调只暂存加密授权码，客户端确认后才交换并加密保存访问及刷新令牌。退出登录、切换账号、停用或授权超时会使未完成关联失效。
 
 ## Vercel
 

@@ -5,9 +5,13 @@ import { articleReviewSchema, articleReviewRequestSchema } from "./article-revie
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { ContentError } from "./http";
 import { actionSchema, briefSchema, dedupeKey, planSchema, siteUrl, validateBriefLinks } from "./schema";
+import { researchReferenceSchema, reviewedKeywords } from "./keyword-selection";
+import { requiredPlanContext } from "./claim-size";
 import type { ContentBrief, ContentMetrics, ContentPlan, ContentWorkspace, MetricsPeriod } from "./types";
 import { bulkUpdateContentClusters, importContentPages } from "./bulk";
 import { storedFunnelCounts, presetFunnelCounts } from "./funnel";
+import { managedAllows } from "@/lib/managed/policy";
+import { hostedWorkerStatus, hostedRequestDeviceId } from "@/lib/hosted/worker";
 
 export const LEASE_MS = 120_000;
 export const WORKER_ONLINE_MS = 90_000;
@@ -39,9 +43,9 @@ function checkedUrl(value: string | null | undefined, domain: string) {
 function checkedBrief(value: ContentBrief | null | undefined, domain: string) {
   try { return validateBriefLinks(value, domain); } catch (e) { throw new ContentError((e as Error).message); }
 }
-export async function expireContentJobs(db: PlannerDb, now = new Date(), siteId?: string) {
+export async function expireContentJobs(db: PlannerDb, now = new Date(), siteId?: string, userId?: string) {
   return db.contentPlanJob.updateMany({
-    where: { ...(siteId ? { siteId } : {}), OR: [
+    where: { ...(siteId ? { siteId } : {}), ...(userId ? { site: { userId } } : {}), OR: [
       { status: "QUEUED", createdAt: { lte: new Date(now.getTime() - QUEUE_TIMEOUT_MS) } },
       { status: "RUNNING", OR: [
         { leaseExpiresAt: { lte: now } }, { leaseExpiresAt: null },
@@ -84,7 +88,7 @@ export async function getContentWorkspace(db: PlannerDb, userId: string, siteId:
   const [pillars, jobs, worker, window, crawl] = await Promise.all([
     db.contentPillar.findMany({ where: { siteId }, orderBy: { createdAt: "asc" }, include: { clusters: { orderBy: { createdAt: "asc" } } } }),
     db.contentPlanJob.findMany({ where: { siteId }, orderBy: { createdAt: "desc" }, take: 20, select: jobColumns }),
-    db.contentWorkerState.findFirst({ orderBy: { lastSeenAt: "desc" } }),
+    hostedWorkerStatus(db, userId),
     metricWindow(db, siteId),
     db.crawl.findFirst({ where: { siteId, status: "COMPLETED" }, orderBy: { finishedAt: "desc" },
       select: { id: true, finishedAt: true, pagesFound: true, maxPages: true } }),
@@ -125,6 +129,7 @@ export async function getContentWorkspace(db: PlannerDb, userId: string, siteId:
       })),
     })),
     jobs: jobs.map(({ request, ...j }) => ({ ...j, funnelCounts: j.kind === "ARTICLE_REVIEW" ? undefined : storedFunnelCounts(request, j.topicCount), result: j.kind === "ARTICLE_REVIEW" ? null : j.result as ContentPlan | null,
+      keywordSelection: researchReferenceSchema.safeParse(request).data?.research.reference,
       reviewResult: j.kind === "ARTICLE_REVIEW" ? articleReviewSchema.safeParse(j.result).data ?? null : null,
       reviewPages: j.kind === "ARTICLE_REVIEW" ? (articleReviewRequestSchema.safeParse(request).data?.pages ?? []).map(({ pageId, title, url, source }) => ({ pageId, title, url, source })) : [],
       appliedAt: j.appliedAt?.toISOString() ?? null, createdAt: j.createdAt.toISOString(),
@@ -150,7 +155,9 @@ export async function runContentAction(db: PlannerDb, userId: string, siteId: st
   switch (action.action) {
     case "recordWebsiteUpdate": return db.$transaction(async tx => { await lockSite(tx, siteId); return recordWebsiteUpdate(tx, siteId, action.clusterId, now); });
     case "startArticleReview": return db.$transaction(async (tx) => {
-      await lockSite(tx, siteId); return startArticleReview(tx, site, action.pageIds, action.pastedText);
+      await lockSite(tx, siteId);
+      if (!managedAllows("codex")) throw new ContentError("managed_restricted", 403);
+      return startArticleReview(tx, site, action.pageIds, action.pastedText, await hostedRequestDeviceId(userId));
     });
     case "applyArticleReview": return db.$transaction(async (tx) => {
       await lockSite(tx, siteId); return applyArticleReview(tx, site, action.jobId, action.pageIds, now);
@@ -211,12 +218,17 @@ export async function runContentAction(db: PlannerDb, userId: string, siteId: st
     case "startPlan": {
       return db.$transaction(async (tx) => {
         await lockSite(tx, siteId);
-        await ownedPillar(tx, siteId, action.pillarId);
+        const { title, keyword, description, audience, goal, url } = await ownedPillar(tx, siteId, action.pillarId);
         if (await tx.contentPlanJob.count({ where: { siteId, status: { in: ["QUEUED", "RUNNING"] } } })) {
           throw new ContentError("A content plan is already queued or running for this site", 409);
         }
         const funnelCounts = action.funnelCounts ?? presetFunnelCounts(action.topicCount);
-        const job = await tx.contentPlanJob.create({ data: { siteId, pillarId: action.pillarId, topicCount: action.topicCount, request: json({ funnelCounts }), activeKey: siteId }, select: jobColumns });
+        const research = action.keywordSelection ? await reviewedKeywords(tx, siteId, action.keywordSelection) : null;
+        if (action.keywordSelection && !research) throw new ContentError("Reviewed keyword selection is unavailable", 409);
+        if (!managedAllows("codex")) throw new ContentError("managed_restricted", 403);
+        requiredPlanContext({ domain: site.domain, topicCount: action.topicCount, funnelCounts,
+          pillar: { title, keyword, description, audience, goal, url }, ...(research && { reviewedKeywordIdeas: research.ideas }) });
+        const job = await tx.contentPlanJob.create({ data: { siteId, hostedDeviceId: await hostedRequestDeviceId(userId!), pillarId: action.pillarId, topicCount: action.topicCount, request: json({ funnelCounts, ...(research && { research }) }), activeKey: siteId }, select: jobColumns });
         return { ok: true, job };
       });
     }

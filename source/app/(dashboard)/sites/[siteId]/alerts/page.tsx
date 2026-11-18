@@ -5,6 +5,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ensureDefaultAlerts } from "@/lib/alerts/evaluate";
 import { PageHeader } from "@/components/ui/page-header";
+import { ReportAnalysisLink } from "@/components/ai-workbench/report-analysis-link";
 import { EvaluateAlertsButton } from "@/components/sites/evaluate-alerts-button";
 import { formatDay } from "@/lib/format";
 
@@ -56,7 +57,10 @@ export default async function AlertsPage({ params }: Props) {
             {t("if you set them up.", "。") }
           </>
         }
-        actions={<EvaluateAlertsButton />}
+        actions={<>
+          <EvaluateAlertsButton />
+          <ReportAnalysisLink siteId={siteId} scope="alerts" t={t} />
+        </>}
       />
 
       <div className="panel divide-y divide-border-soft">

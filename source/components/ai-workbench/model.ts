@@ -1,4 +1,6 @@
 import type { DiagnosticEvidence } from "@/lib/ai-workbench/diagnostic-types";
+import type { ReportSource } from "@/lib/ai-workbench/action-scope";
+import type { WorkbenchResult as StoredResult } from "@/lib/ai-workbench/schema";
 export type TaskKind = "WRITE_ARTICLE" | "REWRITE_ARTICLE" | "SEO_FIX_PLAN";
 export type TaskDiagnosticEvidence = Omit<DiagnosticEvidence, "pages" | "page"> & { page: Omit<NonNullable<DiagnosticEvidence["page"]>, "body"> | null };
 export type ParagraphEdit = { id: string; sourceText: string; replacementText: string; reason: string; evidence: string[]; verification: string[] };
@@ -6,12 +8,14 @@ export type WorkbenchResult = {
   title: string; summary: string; contentMarkdown: string; metaTitle: string; metaDescription: string;
   changeNotes: string[]; factChecks: string[]; internalLinks: { target: string; anchor: string; reason: string }[];
   paragraphEdits?: ParagraphEdit[];
+  reportActions?: StoredResult["reportActions"];
 };
 export type WorkbenchJob = {
   id: string; kind: TaskKind; status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
   title: string; createdAt: string; updatedAt: string; startedAt: string | null; finishedAt: string | null;
   error: string | null; draftText: string | null; result: WorkbenchResult | null;
   diagnosis?: TaskDiagnosticEvidence;
+  reportSources?: ReportSource[];
 };
 export type WorkbenchData = {
   site: { id: string; domain: string }; worker: { online: boolean; lastSeenAt: string | null };

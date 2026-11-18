@@ -1,6 +1,7 @@
 {
   "$comment": "Every external host in the app's code (lib/, app/, packages/, components/ and root files). \"requests\" are the hosts the app contacts and must match the README section \"数据与外部连接\" (see DEVELOPMENT.md, Outbound connections). \"notRequested\" hosts only appear as links or plain strings, and only in the files listed. lib/outbound-hosts.test.ts fails on anything else.",
   "requests": {
+    "aborder.tuitehao.shop": "Hosted desktop workspace, device-bound sessions, business API and local content-worker coordination",
     "api.manus.ai": "Optional Manus key check, user-confirmed keyword research and reading its status and results",
     "private.manuscdn.com": "Signed workbook and Markdown report downloads for an existing Manus task",
     "private-us-east-1.manuscdn.com": "Regional signed workbook and Markdown report downloads for an existing Manus task",
@@ -14,7 +15,12 @@
     "ssl.bing.com": "Bing Webmaster Tools API, only with the user's own key",
     "api.dataforseo.com": "DataForSEO API, only with the user's own key",
     "suggestqueries.google.com": "Google autocomplete keyword suggestions",
-    "api.github.com": "Optional daily update check, only when UPDATE_CHECK_REPO names a repository"
+    "api.github.com": "GitHub release metadata for desktop updates and the optional browser deployment version check",
+    "github.com": "Desktop update feed and versioned release manifest or installer downloads",
+    "release-assets.githubusercontent.com": "GitHub Releases download redirect for desktop update assets",
+    "objects.githubusercontent.com": "GitHub Releases download redirect for desktop update assets",
+    "ghcr.io": "Docker pulls the versioned backend by digest for desktop installation and updates",
+    "pkg-containers.githubusercontent.com": "GitHub Container registry layer download redirects"
   },
   "notRequested": {
     "manus.im": {
@@ -54,13 +60,8 @@
       "files": [
         "components/ai-workbench/chatgpt-connection.tsx",
         "components/ai-workbench/workbench.tsx",
-        "lib/ai-usage/report.ts"
-      ]
-    },
-    "github.com": {
-      "reason": "Release page link in the sidebar footer (only with UPDATE_CHECK_REPO), opened by the user",
-      "files": [
-        "lib/update-check.ts"
+        "lib/ai-usage/report.ts",
+        "../desktop/runtime.mjs"
       ]
     },
     "www.bing.com": {

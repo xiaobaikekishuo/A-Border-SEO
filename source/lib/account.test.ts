@@ -67,6 +67,9 @@ async function seedUser(id: string) {
     },
   });
   await db.session.create({ data: { userId: id, sessionToken: `s-${id}`, expires: new Date(Date.now() + 86_400_000) } });
+  await db.desktopOAuthAttempt.create({
+    data: { id: `approved-${id}`, userId: id, purpose: "login", challenge: "opaque-proof", expiresAt: new Date(), status: "approved" },
+  });
   await db.apiKey.create({ data: { userId: id, provider: "bing", encryptedPassword: "x" } });
 
   const siteId = `site-${id}`;
@@ -97,6 +100,7 @@ async function rowsOf(userId: string): Promise<Record<string, number>> {
     user: await db.user.count({ where: { id: userId } }),
     account: await db.account.count({ where: { userId } }),
     session: await db.session.count({ where: { userId } }),
+    desktopOAuthAttempt: await db.desktopOAuthAttempt.count({ where: { userId } }),
     apiKey: await db.apiKey.count({ where: { userId } }),
     alert: await db.alert.count({ where: { userId } }),
     site: await db.site.count({ where: { userId } }),
@@ -230,11 +234,8 @@ describe("deleteAccount", () => {
 });
 
 describe("schema", () => {
-  // Every table except Auth.js's VerificationToken, WorkerHeartbeat and
-  // ContentWorkerState (process heartbeats), and SchedulerState (the scheduler's
-  // own timestamps), which hold no user data, hangs off User through required
-  // relations that cascade, so deleting the User deletes it. A new model that
-  // does not fails here.
+  // Every model that stores account data hangs off User through required
+  // relations that cascade, so deleting the User deletes its records.
   it("every model cascades from User", () => {
     const models = Prisma.dmmf.datamodel.models;
     // Keep this exemption narrow: adding user data must revisit ownership.
@@ -243,6 +244,9 @@ describe("schema", () => {
     // The installation identifier has no account, grant, token or user data.
     const chatGptHost = models.find((model) => model.name === "ChatGptHost");
     expect(chatGptHost?.fields.map((field) => field.name).sort()).toEqual(["hostId", "id"]);
+    // Pre-login desktop challenges contain no user, site, grant or session data.
+    const desktopLoginChallenge = models.find((model) => model.name === "DesktopLoginChallenge");
+    expect(desktopLoginChallenge?.fields.map((field) => field.name).sort()).toEqual(["challenge", "expiresAt", "id"]);
     const byName = new Map(models.map((m) => [m.name, m]));
     const reaches = (name: string, seen = new Set<string>()): boolean => {
       if (name === "User") return true;
@@ -258,7 +262,7 @@ describe("schema", () => {
           reaches(f.type, seen)
       );
     };
-    const orphans = models.map((m) => m.name).filter((n) => !["VerificationToken", "WorkerHeartbeat", "ContentWorkerState", "SchedulerState", "ChatGptHost"].includes(n) && !reaches(n));
+    const orphans = models.map((m) => m.name).filter((n) => !["VerificationToken", "WorkerHeartbeat", "ContentWorkerState", "SchedulerState", "ChatGptHost", "DesktopLoginChallenge"].includes(n) && !reaches(n));
     expect(orphans).toEqual([]);
   });
 });

@@ -33,6 +33,11 @@ export type AiReport = {
   skipped: number;
 };
 
+/** Page and query exports can contain just the top rows. Only daily totals can be added across dates. */
+export function reportTotal(report: Pick<AiReport, "daily">): number | null {
+  return report.daily.length ? report.daily.reduce((sum, day) => sum + day.value, 0) : null;
+}
+
 export const REPORT_LIMITS = { files: 8, characters: 5 * 1024 * 1024, rows: 5000 } as const;
 
 const HEADERS = {

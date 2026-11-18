@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>A-Border SEO</title>
+  <link rel="stylesheet" href="./panel.css">
+  <script src="./panel.js" defer></script>
+</head>
+<body data-view="home">
+  <svg class="icon-definitions" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path d="m9.5 3-.6 2.1-1.7 1L5 5.6 2.5 10l1.6 1.5v2L2.5 15 5 19.4l2.2-.5 1.7 1 .6 2.1h5l.6-2.1 1.7-1 2.2.5 2.5-4.4-1.6-1.5v-2L21.5 10 19 5.6l-2.2.5-1.7-1L14.5 3Z"/><circle cx="12" cy="12.5" r="3"/></symbol>
+    <symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="7" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/></symbol>
+    <symbol id="icon-lock" viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3m-4 5v2"/></symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="icon-login" viewBox="0 0 24 24"><path d="M14 3h6v18h-6M3 12h12m-5-5 5 5-5 5"/></symbol>
+    <symbol id="icon-chart" viewBox="0 0 24 24"><rect x="3" y="14" width="4" height="7" rx="1"/><rect x="10" y="9" width="4" height="12" rx="1"/><rect x="17" y="3" width="4" height="18" rx="1"/></symbol>
+    <symbol id="icon-layers" viewBox="0 0 24 24"><path d="m12 3 10 5-10 5L2 8Zm-10 9 10 5 10-5M2 16l10 5 10-5"/></symbol>
+    <symbol id="icon-bolt" viewBox="0 0 24 24"><path d="m13 2-10 12h8l-1 8L21 9h-8Z"/></symbol>
+    <symbol id="icon-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Zm-4 9 3 3 5-6"/></symbol>
+  </defs></svg>
+  <div class="ambient" aria-hidden="true"></div>
+  <main>
+    <section id="welcome" class="welcome">
+      <div class="brand-story">
+        <div class="brand-lockup"><img src="./assets/brand-symbol.png" alt="" width="88" height="88"><div><h1>A-Border SEO</h1><p data-text="panel"></p></div></div>
+        <div class="brand-intro"><div class="brand-rule"></div><h2 data-text="welcomeTitle"></h2><p data-text="brandDescription"></p></div>
+        <div class="brand-features">
+          <div><span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#icon-chart"/></svg></span><h3 data-text="featureMonitor"></h3><p data-text="featureMonitorHelp"></p></div>
+          <div><span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#icon-layers"/></svg></span><h3 data-text="featureKeywords"></h3><p data-text="featureKeywordsHelp"></p></div>
+          <div><span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="#icon-bolt"/></svg></span><h3 data-text="featureSync"></h3><p data-text="featureSyncHelp"></p></div>
+        </div>
+      </div>
+      <div id="auth-card" class="auth-card">
+      <header id="panel-toolbar">
+        <div class="settings-brand"><img src="./assets/brand-symbol.png" alt="" width="40" height="40"><div><h1>A-Border SEO</h1><p class="subtitle" data-text="panel"></p></div></div>
+        <div class="toolbar-actions"><button id="settings-link" class="settings-button" data-action="ShowSettings"><svg class="icon" aria-hidden="true"><use href="#icon-settings"/></svg><span data-text="settings"></span></button>
+        <button id="home-link" data-action="ShowHome" data-text="backHome" hidden></button>
+        <div class="language" role="group" data-label="language"><button type="button" data-language="zh" lang="zh-CN" aria-pressed="true">中文</button><button type="button" data-language="en" lang="en" aria-pressed="false">English</button></div></div>
+      </header>
+      <div class="welcome-mark" aria-hidden="true"><img src="./assets/brand-symbol.png" alt="" width="64" height="64"></div>
+      <h2 id="auth-title" data-text="loginTitle"></h2>
+      <p id="auth-help" class="help" data-text="welcomeHelp"></p>
+      <aside id="message" class="notice" role="status" aria-live="polite" hidden></aside>
+      <div id="user-access">
+        <p id="pending-notice" class="notice" data-text="approvalPending" hidden></p>
+        <form id="user-form">
+          <label class="auth-field"><span class="field-label"><svg class="icon" aria-hidden="true"><use href="#icon-user"/></svg><span data-text="username"></span></span><input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" data-placeholder="usernamePlaceholder" pattern="[a-zA-Z0-9_.\-]{3,64}" required minlength="3" maxlength="64"></label>
+          <div class="auth-field"><label class="field-label" for="user-password"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg><span data-text="password"></span></label><div class="password-input"><input id="user-password" name="password" type="password" autocomplete="current-password" data-placeholder="passwordPlaceholder" required minlength="8" maxlength="128"><button id="toggle-password" class="password-toggle" type="button" data-label="showPassword" aria-pressed="false"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><use href="#icon-eye"/><path class="eye-slash" d="m3 3 18 18"/></svg></button></div></div>
+          <label id="confirm-password" class="auth-field" hidden><span class="field-label"><svg class="icon" aria-hidden="true"><use href="#icon-lock"/></svg><span data-text="confirmPassword"></span></span><input name="confirmPassword" type="password" autocomplete="new-password" data-placeholder="confirmPasswordPlaceholder" minlength="8" maxlength="128"></label>
+          <p id="registration-help" class="help" data-text="registrationHelp" hidden></p>
+          <div id="login-options" class="login-options"><span class="secure-label"><svg class="icon" aria-hidden="true"><use href="#icon-shield"/></svg><span data-text="secureLogin"></span></span><button id="password-help-toggle" class="text-button" type="button" aria-expanded="false" aria-controls="password-help" data-text="forgotPassword"></button></div>
+          <p id="password-help" class="notice" data-text="passwordHelp" hidden></p>
+          <button id="user-submit" class="primary" type="submit"><svg class="icon" aria-hidden="true"><use href="#icon-login"/></svg><span id="user-submit-label" data-text="signIn"></span></button>
+        </form>
+        <div class="auth-switch"><span id="auth-switch-label" data-text="noAccount"></span><button id="register-tab" class="text-button" type="button" data-text="registerNow"></button><button id="login-tab" class="text-button" type="button" data-text="backToLogin" hidden></button></div>
+      </div>
+      <div id="signed-in" hidden>
+        <p id="user-greeting" class="greeting"></p>
+        <p id="workspace-state" class="help" role="status"></p>
+        <div class="buttons">
+          <button id="enter-workspace" class="primary" data-action="EnterWorkspace" data-text="enterWorkspace"></button>
+          <button data-action="LogoutUser" data-text="signOut"></button>
+        </div>
+      </div>
+      <div id="unmanaged-home" hidden><button class="primary" data-action="EnterWorkspace" data-text="enterWorkspace"></button></div>
+      </div>
+    </section>
+    <div id="settings-view" hidden>
+    <section id="management" hidden>
+      <div class="heading">
+        <h2 data-text="management"></h2>
+        <button data-action="CheckManaged" data-text="checkManagement"></button>
+      </div>
+      <dl id="management-details"></dl>
+      <p id="management-notice" class="notice" hidden></p>
+      <form id="activation" autocomplete="off" hidden>
+        <label><span data-text="activationCode"></span><input name="code" type="password" required maxlength="200"></label>
+        <button class="primary" type="submit" data-text="activate"></button>
+      </form>
+      <button id="reauthorize" type="button" data-text="reauthorize" hidden></button>
+    </section>
+    <section>
+      <div class="heading">
+        <h2 data-text="services"></h2>
+        <button data-action="Refresh" data-text="refresh"></button>
+      </div>
+      <p id="prerequisites" class="help"></p>
+      <dl id="service-list"></dl>
+      <div class="buttons">
+        <button id="open" class="primary" data-action="Open" data-text="open"></button>
+        <button id="browser" data-action="Browser" data-text="browser"></button>
+        <button id="start" data-action="Start" data-text="start"></button>
+        <button id="stop" data-action="Stop" data-text="stop"></button>
+      </div>
+      <div id="codex-actions" class="buttons" hidden>
+        <button id="login-codex" data-action="LoginCodex" data-text="loginCodex"></button>
+        <button id="start-worker" data-action="StartContentWorker" data-text="startWorker"></button>
+        <button id="stop-worker" data-action="StopContentWorker" data-text="stopWorker"></button>
+      </div>
+      <label class="option"><input id="start-on-launch" type="checkbox"> <span data-text="startOnLaunch"></span></label>
+      <p class="help" data-text="tray"></p>
+    </section>
+    <section id="setup" hidden>
+      <h2 data-text="setup"></h2>
+      <p class="help" data-text="setupHelp"></p>
+      <details id="legacy-options">
+        <summary data-text="legacyOptions"></summary>
+        <label><span data-text="context"></span><input id="legacy-context" maxlength="128"></label>
+        <label><span data-text="project"></span><input id="legacy-project" maxlength="63"></label>
+      </details>
+      <div class="buttons"><button data-action="InspectLegacy" data-text="selectLegacy"></button></div>
+      <div id="legacy" class="notice" hidden>
+        <dl id="legacy-details"></dl>
+        <button data-action="Adopt" data-text="adopt"></button>
+      </div>
+      <form id="create" autocomplete="off" hidden>
+        <div id="google-setup">
+        <p class="help" data-text="oauthHelp"></p>
+        <label><span data-text="clientId"></span><input name="googleClientId" required maxlength="300"></label>
+        <label><span data-text="clientSecret"></span><input name="googleClientSecret" type="password" required maxlength="200"></label>
+        </div>
+        <label class="option"><input name="createVolume" type="checkbox" required> <span data-text="createVolume"></span></label>
+        <button id="create-instance" class="primary" type="submit" data-text="create"></button>
+      </form>
+    </section>
+    <section>
+      <h2 data-text="update"></h2>
+      <dl id="versions"></dl>
+      <p id="update-status" class="help"></p>
+      <progress id="progress" max="100" hidden></progress>
+      <p id="notes" hidden></p>
+      <p id="journal" class="help" hidden></p>
+      <div class="buttons">
+        <button id="check" data-action="CheckUpdate" data-text="check"></button>
+        <button id="manual-update" data-action="ManualUpdate" data-text="manualUpdate" hidden></button>
+        <button id="download" class="primary" data-action="DownloadUpdate" data-text="download" hidden></button>
+        <button id="cancel" data-action="CancelDownload" data-text="cancel" hidden></button>
+        <button id="install" class="primary" data-action="InstallUpdate" data-text="install" hidden></button>
+        <button id="backend" class="primary" data-action="UpgradeBackend" data-text="backend" hidden></button>
+      </div>
+      <label class="option"><input id="auto-check" type="checkbox"> <span data-text="autoCheck"></span></label>
+    </section>
+    <section id="local-data">
+      <h2 data-text="data"></h2>
+      <dl id="instance"></dl>
+      <div class="buttons">
+        <button id="backup" data-action="Backup" data-text="backup"></button>
+        <button id="logs" data-action="Logs" data-text="logs"></button>
+      </div>
+      <pre id="diagnostics" hidden></pre>
+    </section>
+    </div>
+  </main>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# Only the desktop controller enables this overlay after checking the local image pin.
+services:
+  app:
+    image: ${ABORDER_DESKTOP_LOCAL_IMAGE_ID:?internal_image_id_required}
+    pull_policy: never
+  worker:
+    image: ${ABORDER_DESKTOP_LOCAL_IMAGE_ID:?internal_image_id_required}
+    pull_policy: never

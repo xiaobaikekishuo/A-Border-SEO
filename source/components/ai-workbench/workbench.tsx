@@ -10,9 +10,11 @@ import { EvidencePanel, TaskEvidence } from "./evidence-panel";
 import { ParagraphReview } from "./paragraph-review";
 import { ChatGPTConnection, CHATGPT_USAGE_URL, type AccountExecution } from "./chatgpt-connection";
 import { UsagePanel } from "./usage-panel";
+import { ReportActions, ReportTask, type ReportSubmission } from "./report-task";
+import type { ActionScope } from "@/lib/ai-workbench/action-scope";
 import s from "./workbench.module.css";
 
-export function CodexWorkbench({ siteId, domain, initialData, initialSelection = {} }: { siteId: string; domain: string; initialData?: WorkbenchData; initialSelection?: DiagnosticSelection }) {
+export function CodexWorkbench({ siteId, domain, initialData, initialSelection = {}, actionScope }: { siteId: string; domain: string; initialData?: WorkbenchData; initialSelection?: DiagnosticSelection; actionScope?: ActionScope }) {
   const { t, locale } = useI18n();
   const [data, setData] = useState<WorkbenchData | null>(initialData ?? null);
   const [loading, setLoading] = useState(!initialData);
@@ -20,6 +22,7 @@ export function CodexWorkbench({ siteId, domain, initialData, initialSelection =
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [rejectedRevision, setRejectedRevision] = useState<string | null>(null);
   const [kind, setKind] = useState<TaskKind>("WRITE_ARTICLE");
   const [title, setTitle] = useState("");
   const [keyword, setKeyword] = useState("");
@@ -47,6 +50,9 @@ export function CodexWorkbench({ siteId, domain, initialData, initialSelection =
   const statusName = (job: WorkbenchJob) => ({ QUEUED: t("Queued", "排队中"), RUNNING: t("Generating", "生成中"), SUCCEEDED: t("Draft ready", "草稿就绪"), FAILED: job.error?.startsWith("Canceled by user") ? t("Canceled", "已取消") : t("Failed", "未完成") })[job.status];
   const kindName = (jobKind: TaskKind) => tasks.find(task => task.kind === jobKind)?.title ?? jobKind;
   function errorMessage(message: string) {
+    if (message === "report_evidence_changed") return t("The saved report changed. Refresh the evidence in the task.", "报表数据已有更新，请在任务里刷新依据。");
+    if (message === "report_claim_too_large") return t("The reviewed report and instructions exceed the local worker’s task limit. Shorten your instructions or open one source report and review its evidence before generating.", "这份报表和补充要求超过本机助手的任务长度上限。请缩短补充要求，或打开单项报表核对依据后再生成。");
+    if (message === "report_evidence_empty") return t("This report has no saved evidence yet.", "当前报表还没有可分析的数据。");
     if (/crawl changed|latest completed crawl|does not match the diagnosis|Choose a page from the saved evidence/i.test(message)) return t("Page evidence changed or no longer matches the selected source. Refresh the preview, select the page, and bring it into the task again. Your task text is preserved.", "页面依据已变化或与所选来源不一致。请刷新预览、选择页面并重新带入任务，任务输入仍保留。");
     if (/Paragraph (source|edits)|Applying paragraph edits/i.test(message)) return t("The proposed paragraph changes could not be matched safely to the source. Review the saved task before trying again.", "建议的段落修改无法可靠对应原文，请检查已保存的任务后再重试。");
     if (isAccountLimitError(message)) return t("This connection reached a usage limit. Check ChatGPT usage and app limits, then start a new task when available. No other connection or API key is used automatically.", "此连接已达到使用限制。请查看 ChatGPT 用量及应用上限，恢复后再新建任务。不会自动切换其他连接或 API Key。");
@@ -105,22 +111,28 @@ export function CodexWorkbench({ siteId, domain, initialData, initialSelection =
       return result;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : t("The request failed.", "请求失败。");
+      if (message === "report_evidence_changed" && typeof payload.evidenceRevision === "string") setRejectedRevision(payload.evidenceRevision);
       setError(actionName === "start" && /fetch|network|JSON|Unexpected/i.test(message) ? t("The response was interrupted. The task may already exist. Refresh task history before submitting again; your inputs are preserved.", "响应中断，任务可能已经创建。请先刷新任务记录再决定是否提交，输入内容已保留。") : message);
       return null;
     } finally { mutating.current = false; setBusy(null); }
   }
-  async function generate(event: FormEvent) {
-    event.preventDefault();
-    if (!canGenerate) return;
-    const result = await post({ action: "start", kind, title: title.trim(), instructions: instructions.trim(), keyword: keyword.trim(), language,
-      provider: execution.provider, ...(execution.provider === "CHATGPT_APP" ? { profileId: execution.profileId, model: execution.model, planOnlyConfirmed: execution.planOnlyConfirmed } : {}),
-      ...(clusterId ? { clusterId } : {}), ...(pageId ? { pageId } : {}),
-      ...(diagnosis ? { diagnosis: { ...diagnosis.selection, ...(diagnosis.crawl ? { crawlId: diagnosis.crawl.id } : {}) } } : {}), body: body.trim() }, "start");
+  async function startTask(input: Record<string, unknown>) {
+    const result = await post({ ...input, action: "start", provider: execution.provider, ...(execution.provider === "CHATGPT_APP" ? { profileId: execution.profileId, model: execution.model, planOnlyConfirmed: execution.planOnlyConfirmed } : {}) }, "start");
     if (result && typeof result.jobId === "string") {
       if (dirty) setNotice(t("Task submitted. Save your current edits before opening its result.", "任务已提交。请先保存当前编辑，再打开新结果。"));
       else setSelectedId(result.jobId);
       await refresh();
     }
+  }
+  async function generate(event: FormEvent) {
+    event.preventDefault();
+    if (!canGenerate) return;
+    await startTask({ kind, title: title.trim(), instructions: instructions.trim(), keyword: keyword.trim(), language,
+      ...(clusterId ? { clusterId } : {}), ...(pageId ? { pageId } : {}),
+      ...(diagnosis ? { diagnosis: { ...diagnosis.selection, ...(diagnosis.crawl ? { crawlId: diagnosis.crawl.id } : {}) } } : {}), body: body.trim() });
+  }
+  async function generateReport(submission: ReportSubmission) {
+    await startTask({ ...submission, kind: "SEO_FIX_PLAN" });
   }
   async function saveDraft() {
     if (!editor || !dirty) return;
@@ -190,20 +202,21 @@ export function CodexWorkbench({ siteId, domain, initialData, initialSelection =
       <div className={s.headingGroup}><span className={s.logo}><Bot size={27} /></span><div><p className={s.eyebrow}>CODEX WORKBENCH</p><h1>{t("Codex workbench", "Codex 工作台")}</h1></div></div>
       <div className={s.headerActions}><span className={s.domain}><Globe size={15} />{domain}</span><button type="button" className={s.iconButton} aria-label={t("Refresh workbench", "刷新工作台")} disabled={refreshing || !!busy} onClick={() => void refresh()}><RefreshCw size={18} className={refreshing ? s.spinning : ""} /></button></div>
     </header>
-    <section className={s.intro}>
+    {actionScope ? <div className={s.reportNav}><Link href={`/sites/${encodeURIComponent(siteId)}/assistant`}>{t("Other workbench tasks", "其他工作台任务")}</Link></div> : <><section className={s.intro}>
       <div><p className={s.kicker}>{t("From a useful idea to a usable draft", "从一个想法，到一份可用的草稿")}</p><h2>{t("Write. Improve. Make the next change clear.", "写好内容，让下一步修改更清楚。")}</h2><p>{t("Choose a task, add your context, and review the result here.", "选一个任务，补充要求，在这里检查并编辑生成结果。")}</p></div>
       <div className={s.connection}><div><span className={`${s.dot} ${data?.worker.online ? s.online : ""}`} />{loading ? t("Checking local helper", "正在检查本机助手") : data?.worker.online ? t("Local helper online", "本机助手在线") : t("Local helper offline", "本机助手未连接")}</div><strong>{t("Drafts for your review", "生成草稿，由你审阅")}</strong><span>{t("Choose your connection below.", "在下方选择新任务使用的连接。")}</span></div>
     </section>
     <div className={s.boundary}><ShieldCheck size={18} /><p>{t("Results stay as local drafts for your review. Publishing and website changes are not performed by these tasks.", "结果保存为本地草稿，供你审阅。这些任务不会发布文章或修改网站。")}</p></div>
-    <EvidencePanel siteId={siteId} selection={previewSelection} pages={pages} disabled={!!busy || !!activeJob} onSelection={value => setPreviewSelection(value)} onUse={useEvidence} />
+    <EvidencePanel siteId={siteId} selection={previewSelection} pages={pages} disabled={!!busy || !!activeJob} onSelection={value => setPreviewSelection(value)} onUse={useEvidence} /></>}
     {pendingEvidence && <div className={s.help} role="alert"><div><p>{t("Your task contains pasted source text. Switching to the selected page replaces that text and the task title. Copy it first if you want to keep it.", "任务中已有粘贴的原文。切换到所选页面将替换这份原文和任务标题，如需保留请先复制。")}</p><div className={s.actions}><button type="button" onClick={() => setPendingEvidence(null)}>{t("Keep current text", "保留当前原文")}</button><button type="button" disabled={!!busy || !!activeJob} onClick={() => bindEvidence(pendingEvidence.evidence, pendingEvidence.kind)}>{t("Use selected page instead", "改用所选页面原文")}</button></div></div></div>}
     <ChatGPTConnection siteId={siteId} disabled={!!busy || !!activeJob} onChange={setExecution} />
-    <UsagePanel key={siteId} siteId={siteId} refreshKey={data?.jobs.map(job => `${job.id}:${job.status}:${job.updatedAt}`).join("|") ?? ""} />
-    {error && <div className={s.error} role="alert"><span>{errorMessage(error)} {isAccountLimitError(error) && <a href={CHATGPT_USAGE_URL} target="_blank" rel="noreferrer">{t("Manage usage", "管理用量")}</a>}</span><button type="button" onClick={() => void refresh()} disabled={refreshing}>{t("Refresh status", "刷新状态")}</button></div>}
+    {!actionScope && <UsagePanel key={siteId} siteId={siteId} refreshKey={data?.jobs.map(job => `${job.id}:${job.status}:${job.updatedAt}`).join("|") ?? ""} />}
+    {error && error !== "report_evidence_changed" && <div className={s.error} role="alert"><span>{errorMessage(error)} {isAccountLimitError(error) && <a href={CHATGPT_USAGE_URL} target="_blank" rel="noreferrer">{t("Manage usage", "管理用量")}</a>}</span><button type="button" onClick={() => void refresh()} disabled={refreshing}>{t("Refresh status", "刷新状态")}</button></div>}
     {notice && <p className={s.notice} role="status"><Check size={17} />{notice}</p>}
     {!loading && data && !data.worker.online && <div className={s.help}><CircleHelp size={18} /><div>{t("Start the local content helper, then refresh. If login expired, complete the dedicated ChatGPT login on this computer. Do not paste passwords or API keys here.", "请先启动本机内容助手，再刷新状态。登录过期时，在本机完成专用 ChatGPT 登录。不要在任务中填写密码或 API Key。")}</div></div>}
     <div className={s.workspace}>
-      <form className={s.composer} onSubmit={generate}>
+      {actionScope ? <div>{activeJob && <p className={s.notice}>{t("A task is already running for this site.", "当前站点已有任务在处理。")}</p>}
+        <ReportTask siteId={siteId} scope={actionScope} busy={!!busy} disabled={!data?.worker.online || !execution.ready || !!activeJob || (!!error && error !== "report_evidence_changed" && error !== "report_claim_too_large")} rejectedRevision={rejectedRevision} onStart={generateReport} /></div> : <form className={s.composer} onSubmit={generate}>
         <div className={s.sectionTitle}><span className={s.step}>01</span><div><h2>{t("Create a task", "新建任务")}</h2><p>{t("One click starts one new generation.", "每次点击生成，都会创建一个新任务。")}</p></div></div>
         {diagnosis && <div className={s.taskEvidenceBinding}><strong>{t("Saved evidence selected", "已选诊断依据")}</strong><span>{diagnosis.page?.url ?? diagnosis.selection.url}</span>{diagnosis.selection.query && <span>{diagnosis.selection.query}</span>}<p>{t("Evidence is checked again when you submit. A newer crawl requires a new preview.", "提交时会重新核对依据。有更新的抓取时，请刷新预览再带入。")}</p><button type="button" onClick={() => { setDiagnosis(null); setPageId(""); }}>{t("Clear selection", "取消带入")}</button></div>}
         <div className={s.taskChoices} role="group" aria-label={t("Task type", "任务类型")}>
@@ -225,7 +238,7 @@ export function CodexWorkbench({ siteId, domain, initialData, initialSelection =
         <p className={s.privacy}>{execution.provider === "CHATGPT_APP" ? t("Submitting sends your requirements and selected article/site evidence to OpenAI using this app's authorized ChatGPT connection.", "提交后，将通过此应用已授权的 ChatGPT 连接，向 OpenAI 发送任务要求及所选文章、站点证据。") : t("Submitting sends your requirements and selected article/site evidence through the local Codex account to generate a response.", "提交后，将通过本机 Codex 账号发送任务要求及所选文章、站点证据以生成结果。")}</p>
         <button className={s.primaryButton} type="submit" disabled={!canGenerate}>{busy === "start" ? <Loader2 size={18} className={s.spinning} /> : <Sparkles size={18} />}{t("Generate with my account", "使用账号额度生成")}<ArrowRight size={17} /></button>
         {activeJob && <p className={s.sourceHint}>{t("This site has an active task. Wait for it to finish or cancel it first.", "当前站点已有任务正在处理，请等待完成或先取消。")} {activeJob.kind === "KEYWORD_RESEARCH" && <Link href={`/sites/${siteId}/keyword-research?mode=chatgpt`}>{t("View keyword task", "查看关键词任务")}</Link>} {activeJob.kind === "DOMAIN_ANALYSIS" && <Link href={`/sites/${siteId}/domain-overview?mode=chatgpt`}>{t("View domain diagnosis", "查看域名诊断")}</Link>} {activeJob.kind === "BACKLINK_ANALYSIS" && <Link href={`/sites/${siteId}/backlinks?mode=chatgpt`}>{t("View link analysis", "查看链接分析")}</Link>}</p>}
-      </form>
+      </form>}
       <section className={s.results}>
         <div className={s.sectionTitle}><span className={s.step}>02</span><div><h2>{t("Review and use", "审阅与使用")}</h2><p>{t("Your work is saved by site, as a draft.", "按站点保存任务，生成内容均为草稿。")}</p></div></div>
         <div className={s.history}><label htmlFor="workbench-history">{t("Task history · latest 20", "任务记录 · 最近 20 条")}</label><select id="workbench-history" value={selectedId ?? ""} onChange={event => chooseJob(event.target.value)}><option value="" disabled>{loading ? t("Loading…", "正在读取…") : t("Choose a task", "选择任务")}</option>{data?.jobs.map(job => <option key={job.id} value={job.id}>{statusName(job)} · {job.title}</option>)}</select></div>
@@ -237,6 +250,7 @@ export function CodexWorkbench({ siteId, domain, initialData, initialSelection =
           {selectedJob.diagnosis && <TaskEvidence evidence={selectedJob.diagnosis} />}
           {selectedJob.result && editor?.jobId === selectedJob.id && <>
             <p className={s.summary}>{selectedJob.result.summary}</p>
+            {!!selectedJob.result.reportActions?.length && <ReportActions siteId={siteId} actions={selectedJob.result.reportActions} sources={selectedJob.reportSources ?? []} />}
             {selectedJob.kind === "REWRITE_ARTICLE" && <ParagraphReview edits={selectedJob.result.paragraphEdits ?? []} text={editor.text} disabled={!!busy} onApply={applyEdit} />}
             <div className={s.editorBar}><span><FileText size={16} />{t("Draft text", "草稿正文")}<small>{dirty ? t("Unsaved changes", "有未保存的修改") : t("Saved locally", "已存本机")}</small></span><div className={s.actions}><button type="button" onClick={() => void copyDraft()}><Copy size={15} />{t("Copy", "复制")}</button><button type="button" onClick={downloadDraft}><Download size={15} />{t("Download .md", "下载 .md")}</button></div></div>
             <textarea className={s.editor} aria-label={t("Draft text", "草稿正文")} spellCheck={false} maxLength={60000} value={editor.text} onChange={event => setEditor(current => current ? { ...current, text: event.target.value } : current)} />

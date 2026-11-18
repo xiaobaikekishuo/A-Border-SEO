@@ -1,6 +1,7 @@
 import { getI18n } from "@/lib/i18n/server";
 import Link from "next/link";
 import { getTopKeywords } from "@/lib/seo-metrics";
+import { getOverviewKeywords } from "@/lib/seo-opportunities";
 import { PositionBadge, CtrCell, NumCell } from "@/components/ui/data-table";
 
 interface TopKeywordsProps {
@@ -13,7 +14,9 @@ const th = "mono-label px-4 py-2.5 text-[11px] font-normal text-muted-foreground
 
 export async function TopKeywords({ siteId, days = 28, limit = 10 }: TopKeywordsProps) {
   const { t } = await getI18n();
-  const topKeywords = await getTopKeywords(siteId, days, limit);
+  const topKeywords = days === 28 && limit <= 10
+    ? (await getOverviewKeywords(siteId)).slice(0, limit)
+    : await getTopKeywords(siteId, days, limit);
 
   return (
     <section className="panel overflow-hidden">

@@ -8,6 +8,20 @@
 .workbench button,.workbench input,.workbench select,.workbench textarea { font:inherit; }
 .workbench button { cursor:pointer; transition:background .16s,border-color .16s; }
 .workbench button:disabled { cursor:not-allowed; opacity:.45; }
+.reportNav { padding:12px clamp(12px,3vw,30px); text-align:right; }
+.reportNav a,.reportActions a { color:#bdafff; text-decoration:underline; text-underline-offset:3px; }
+.reportPeriod { margin:0 0 14px; color:#b4c4da; font-size:13px; line-height:1.8; }
+.reportSource { margin:0 0 8px; border:1px solid #30405b; border-radius:9px; }
+.reportSource summary { padding:10px 12px; cursor:pointer; font-weight:600; }
+.reportSource summary span { margin-left:8px; color:#94a8c7; font-size:12px; font-weight:400; }
+.reportSource dl { padding:10px 12px; border-top:1px solid #29364d; font-size:12px; }
+.reportSource dl div { display:grid; grid-template-columns:minmax(6em,35%) 1fr; gap:8px; }
+.reportSource dt { color:#99acc8; }
+.reportSource dd,.reportActions span { overflow-wrap:anywhere; }
+.reportActions { padding:0; list-style:none; }
+.reportActions li { padding:12px 0; border-bottom:1px solid #2a3a53; }
+.reportActions p { margin:5px 0; font-size:13px; line-height:1.7; }
+.reportActions span { display:flex; flex-wrap:wrap; gap:8px; margin-top:5px; font-size:12px; }
 .workbench button:focus-visible,.workbench summary:focus-visible,.workbench a:focus-visible { outline:2px solid #a38df8; outline-offset:3px; }
 .iconButton { display:grid; place-items:center; width:38px; height:38px; border:1px solid transparent; border-radius:10px; background:none; color:#94a8c7; }
 .iconButton:hover { background:#1a263c; }

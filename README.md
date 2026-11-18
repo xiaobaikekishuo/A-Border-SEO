@@ -2,7 +2,7 @@
 
 自用的 SEO 与 GEO 工作台，基于 [CrawlSEO](https://github.com/crawlseo/crawlseo) 扩展。
 
-本仓库保存 2026-11-11 本地部署的源码快照，应用版本为 `1.1.2`，包含后续的 ChatGPT 连接修复、Manus 关键词研究与结果预览。用于私有备份、继续开发和在新环境部署。
+本仓库从 2026-11-11 的 `1.1.2` 本地部署快照继续开发，包含 ChatGPT 连接、Manus 关键词研究与结果预览。桌面端、后台与 MCP 当前版本由仓库版本脚本统一检查。
 
 ## 图片演示与操作案例
 
@@ -39,11 +39,24 @@
 |---|---|
 | `source/` | Next.js 应用、后台 worker、数据库迁移、MCP、本机 worker 和测试 |
 | `windows/` | Windows 启动脚本、Docker Compose、本机配置模板和使用说明 |
+| `server/` | 服务器业务包构建、独立服务、备份、迁移与恢复 |
 | `docs/` | 图文演示、使用案例及界面截图 |
 | `升级说明.md` | 升级及数据迁移说明 |
 | `LICENSE` | MIT 许可证，保留 CrawlSEO 与 A-Border 的版权声明 |
 
+## 服务器工作台与桌面客户端
+
+1.5.0 增加服务器工作台模式：后台、PostgreSQL 和普通任务由服务器运行；带受信服务器配置的 Windows 客户端注册登录后直接进入远程工作台，无需本机 Docker。本机内容 worker 仍使用用户电脑上的专用 Codex 授权，不把授权上传到服务器。
+
+管理服务与业务后台分别执行账号和设备策略，使用独立的回环接口通信。服务器模式必须配置 HTTPS、账号隔离、数据库备份和明确的数据迁移流程。源码或安装包构建成功不表示服务器已部署或客户端已经接通。部署与恢复步骤见 [服务器说明](server/README.md)，管理协议见 [内部鉴权合同](control-plane/hosted-workbench.md)。
+
 ## 在 Windows 本机运行
+
+Windows x64 桌面版使用 Electron 控制台管理现有 Docker 服务，并提供数据接管、备份和版本更新。安装、开发及后台恢复见 [Windows 桌面版](docs/DESKTOP.md) 和 [接管、迁移与恢复](docs/DATA-MIGRATION.md)。
+
+发行者可独立部署管理服务，向已注册的受管客户端下发授权、维护和版本策略。部署、打包和验收见 [受管桌面版](docs/MANAGEMENT.md)。
+
+也可继续通过 Windows 命令行套件启动并在浏览器中使用：
 
 1. 安装 Docker Desktop 并启用 Linux 容器，准备 PowerShell 7。
 2. 下载或克隆仓库，保持 `source` 与 `windows` 为相邻目录。
@@ -76,7 +89,7 @@ npx tsc --noEmit
 npm test -- --pool=forks --maxWorkers=2
 ```
 
-见 [开发说明](source/DEVELOPMENT.md) 与 [测试说明](source/TESTING.md)。原有 GitHub Actions 模板保存在 `source/.github/workflows/`，此目录结构下不会自动运行或发布镜像。
+见 [开发说明](source/DEVELOPMENT.md) 与 [测试说明](source/TESTING.md)。仓库根目录的 `.github/workflows/` 运行代码、容器和 Windows 安装包检查，正式发行见 [发行说明](docs/RELEASE.md)。
 
 ## 本地数据与密钥
 

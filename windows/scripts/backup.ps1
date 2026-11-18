@@ -1,7 +1,7 @@
-#requires -Version 7.0
+#requires -Version 7.3
 [CmdletBinding()]
-param()
-. (Join-Path $PSScriptRoot 'common.ps1')
+param([string]$DataRoot = '', [string]$DockerContext = '', [string]$Project = '')
+. (Join-Path $PSScriptRoot 'common.ps1') -DataRoot $DataRoot -DockerContext $DockerContext -Project $Project
 $db=Get-SeoDatabase
 $stamp=Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $backupDir=Join-Path $script:SeoRoot "backups\$stamp"
@@ -22,9 +22,13 @@ try {
         $roundtrip=[Security.Cryptography.ProtectedData]::Unprotect($protected,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)
         if(-not [Linq.Enumerable]::SequenceEqual[byte]($envBytes,$roundtrip)){throw '环境配置加密回读校验失败。'}
     } finally { if($envBytes){[Array]::Clear($envBytes,0,$envBytes.Length)}; if($roundtrip){[Array]::Clear($roundtrip,0,$roundtrip.Length)} }
-    foreach($file in @('compose.local.yml','.env.example','deployment-info.json')){
-        $source=Join-Path $script:SeoRoot $file
-        if(Test-Path -LiteralPath $source -PathType Leaf){Copy-Item -LiteralPath $source -Destination $backupDir}
+    $metadata = @(
+        (Join-Path $script:SeoToolRoot 'compose.local.yml')
+        (Join-Path $script:SeoToolRoot '.env.example')
+        (Join-Path $script:SeoRoot 'deployment-info.json')
+    )
+    foreach ($source in $metadata) {
+        if (Test-Path -LiteralPath $source -PathType Leaf) { Copy-Item -LiteralPath $source -Destination $backupDir }
     }
     $sha=(Get-FileHash -LiteralPath $dump -Algorithm SHA256).Hash
     $images=Invoke-SeoCompose images --format json

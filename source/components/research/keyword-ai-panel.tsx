@@ -25,6 +25,7 @@ export function KeywordAiPanel({ siteId, initialData }: { siteId: string; initia
     return { seed: "", count: 12, language, ...getResearchDefaults("KEYWORD_RESEARCH", language) };
   });
   const [selectedId, setSelectedId] = useState<string | null>(initialData?.jobs[0]?.id ?? null);
+  const [planSelection, setPlanSelection] = useState<{ jobId: string; indexes: number[] } | null>(null);
   const [filter, setFilter] = useState("");
   const [funnel, setFunnel] = useState("");
   const [saved, setSaved] = useState<Set<string>>(new Set());
@@ -38,6 +39,8 @@ export function KeywordAiPanel({ siteId, initialData }: { siteId: string; initia
   const selected = jobs.find(job => job.id === selectedId);
   const active = data?.activeTask ?? data?.jobs.find(job => job.status === "QUEUED" || job.status === "RUNNING");
   const ideas = visibleKeywordIdeas(selected, filter, funnel);
+  const allIdeas = selected?.result?.keywordIdeas ?? [];
+  const planIndexes = planSelection && selected?.id === planSelection.jobId ? planSelection.indexes : [];
   const patch = (value: Partial<KeywordInput>) => setInput(current => ({ ...current, ...value }));
   function addFocus(prompt: string) {
     if (appendResearchFocus(input.instructions, prompt) === null) {
@@ -82,6 +85,7 @@ export function KeywordAiPanel({ siteId, initialData }: { siteId: string; initia
   function readableError(message: string) {
     if (/usage.limit|quota|rate.limit|not_eligible/i.test(message)) return t("This account cannot generate right now. Check its plan eligibility and usage in ChatGPT, then start a new task when available.", "此账号暂时无法生成。请在 ChatGPT 检查套餐资格及用量，恢复后再手动新建任务。");
     if (/Canceled by user/i.test(message)) return t("Canceled. Allowance already used is not refunded.", "已取消，已使用的账号额度不会退回。");
+    if (/open the desktop app/i.test(message)) return t("Open this research page in the desktop app and sign in to ChatGPT on this device.", "请在桌面客户端打开此研究页面，并在本机登录 ChatGPT。");
     if (/worker|codex_executable_missing/i.test(message)) return t("The local content helper is unavailable. Start the local software and refresh the task history.", "本机内容助手暂不可用，请启动本地软件后刷新任务记录。");
     if (/chatgpt|connection|profile|model|plan permission|credit overage/i.test(message)) return t("Check the ChatGPT connection, model and plan permission above before starting another task.", "请检查上方 ChatGPT 连接、模型与套餐授权，再手动新建任务。");
     if (/already has an active/i.test(message)) return t("This site already has an active task. Refresh its status and wait for it to finish.", "此站点已有进行中的任务，请刷新状态并等待完成。");
@@ -149,7 +153,9 @@ export function KeywordAiPanel({ siteId, initialData }: { siteId: string; initia
         {active && <p className={s.muted}>{active.kind === "KEYWORD_RESEARCH" ? t("A keyword task is already active. Wait for it to finish or cancel it in history.", "已有关键词任务正在进行，请等待完成或在任务记录中取消。") : t("A workbench task is active for this site. Wait for it to finish before generating keywords.", "此站点的工作台任务正在进行，请等待完成后再生成关键词。")}</p>}
         {!loading && !data?.worker.online && <p className={s.error}>{t("Local content helper is offline. Start the local software, then refresh tasks.", "本机内容助手离线，请启动本地软件后刷新任务记录。")}</p>}
         <button type="submit" className={s.submit} disabled={!canGenerate}>{busy ? <Loader2 size={17} className={s.spinner} /> : <Sparkles size={17} />}{t("Generate with ChatGPT plan", "使用 ChatGPT 账号额度生成")}</button>
-        {!execution.ready && <p className={`${s.muted} mt-3`}>{t("Connect an account, choose a model and confirm credit overage is disabled above.", "请在上方连接账号、选择模型，并确认已关闭超额额度使用。")}</p>}
+        {!execution.ready && <p className={`${s.muted} mt-3`}>{execution.provider === "CODEX_LOCAL"
+          ? t("Sign in to ChatGPT on this device and start the local worker above.", "请在上方登录本机 ChatGPT 并启动本机 Worker。")
+          : t("Connect an account, choose a model and confirm credit overage is disabled above.", "请在上方连接账号、选择模型，并确认已关闭超额额度使用。")}</p>}
       </form>
       <aside className={s.card}>
         <div className={s.header}><h3>{t("2. Review task history", "2. 查看任务记录")}</h3><button type="button" className={s.secondary} aria-label={t("Refresh keyword tasks", "刷新关键词任务")} disabled={refreshing || busy} onClick={() => void refresh()}><RefreshCw size={15} className={refreshing ? s.spinner : ""} /></button></div>
@@ -164,7 +170,28 @@ export function KeywordAiPanel({ siteId, initialData }: { siteId: string; initia
       <p className={s.notice}>{t("Search volume, difficulty and CPC are unknown here. ChatGPT does not supply measured keyword metrics. GSC observations describe only your site and period; they are not total market search volume.", "这里的搜索量、难度和 CPC 均为未知。ChatGPT 不提供实测关键词指标；GSC 观察只代表你的网站及对应时段，不是全市场搜索量。")}</p>
       <div className={s.toolbar}><input aria-label={t("Filter keyword candidates", "筛选关键词候选")} placeholder={t("Filter by keyword or topic group…", "按关键词或主题组筛选…")} value={filter} onChange={e => setFilter(e.target.value)} /><select aria-label={t("Filter funnel stage", "筛选漏斗阶段")} value={funnel} onChange={e => setFunnel(e.target.value)}><option value="">{t("All funnel stages", "全部漏斗阶段")}</option><option value="TOFU">TOFU</option><option value="MOFU">MOFU</option><option value="BOFU">BOFU</option></select></div>
       <p className={s.muted}>{t("Showing", "当前显示")} {ideas.length} / {selected.result.keywordIdeas?.length ?? 0}</p>
-      <div className={s.ideas}>{ideas.map(idea => <article className={s.idea} key={idea.keyword}><h4>{idea.keyword}</h4><div className={s.tags}><span>{idea.funnel}</span><span>{intents[idea.intent]}</span></div><dl><div><dt>{t("Topic group", "主题分组")}</dt><dd>{idea.cluster}</dd></div><div><dt>{t("Content angle", "内容角度")}</dt><dd>{idea.angle}</dd></div><div><dt>{t("Why consider it (AI judgment)", "建议理由（AI 判断）")}</dt><dd>{idea.rationale}</dd></div></dl><div className={s.ideaFooter}><p className={s.metric}>{t("Volume / Difficulty / CPC", "搜索量 / 难度 / CPC")}<strong>{t("Unknown", "未知")}</strong></p><button type="button" className={s.save} disabled={saved.has(idea.keyword) || saving.has(idea.keyword)} onClick={() => void save(idea.keyword)}>{saved.has(idea.keyword) ? <Check size={15} /> : saving.has(idea.keyword) ? <Loader2 size={15} className={s.spinner} /> : <Bookmark size={15} />}{saved.has(idea.keyword) ? t("Saved", "已保存") : t("Save keyword", "保存关键词")}</button></div>{saveErrors[idea.keyword] && <p className={s.error} role="alert">{saveErrors[idea.keyword]}</p>}</article>)}</div>
+      <div className={s.resultHeader}>
+        <span>{t("Selected for planning: {n}", "已选入规划：{n} 个词", { n: planIndexes.length })}</span>
+        {planIndexes.length > 0 && <Link className={s.secondary} prefetch={false}
+          href={`/sites/${encodeURIComponent(siteId)}/content?researchJob=${encodeURIComponent(selected.id)}&ideas=${planIndexes.join(",")}`}>
+          {t("Use selected ideas in content planning", "将所选词带入内容规划")}
+        </Link>}
+      </div>
+      <div className={s.ideas}>{ideas.map(idea => {
+        const index = allIdeas.indexOf(idea);
+        return <article className={s.idea} key={index}><h4><label className="flex items-center gap-2">
+          <input type="checkbox" checked={planIndexes.includes(index)}
+            aria-label={t("Select {word} for planning", "将 {word} 选入规划", { word: idea.keyword })}
+            onChange={event => {
+              const checked = event.target.checked;
+              setPlanSelection(previous => {
+                const indexes = previous?.jobId === selected.id ? previous.indexes : [];
+                return { jobId: selected.id, indexes: checked ? [...indexes, index] : indexes.filter(i => i !== index) };
+              });
+            }} />
+          {idea.keyword}
+        </label></h4><div className={s.tags}><span>{idea.funnel}</span><span>{intents[idea.intent]}</span></div><dl><div><dt>{t("Topic group", "主题分组")}</dt><dd>{idea.cluster}</dd></div><div><dt>{t("Content angle", "内容角度")}</dt><dd>{idea.angle}</dd></div><div><dt>{t("Why consider it (AI judgment)", "建议理由（AI 判断）")}</dt><dd>{idea.rationale}</dd></div></dl><div className={s.ideaFooter}><p className={s.metric}>{t("Volume / Difficulty / CPC", "搜索量 / 难度 / CPC")}<strong>{t("Unknown", "未知")}</strong></p><button type="button" className={s.save} disabled={saved.has(idea.keyword) || saving.has(idea.keyword)} onClick={() => void save(idea.keyword)}>{saved.has(idea.keyword) ? <Check size={15} /> : saving.has(idea.keyword) ? <Loader2 size={15} className={s.spinner} /> : <Bookmark size={15} />}{saved.has(idea.keyword) ? t("Saved", "已保存") : t("Save keyword", "保存关键词")}</button></div>{saveErrors[idea.keyword] && <p className={s.error} role="alert">{saveErrors[idea.keyword]}</p>}</article>;
+      })}</div>
       {!ideas.length && <p className={s.notice}>{t("No candidates match this filter.", "没有符合筛选条件的候选词。")}</p>}
       <details className={s.checks}><summary>{t("Checks before using these suggestions", "使用这些建议前需要核对")}</summary><ul>{selected.result.factChecks.map((check, index) => <li key={index}>{check}</li>)}</ul></details>
     </section>}

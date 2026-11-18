@@ -1,7 +1,8 @@
 import { db } from "@/lib/db";
+import { cache } from "react";
 import { getGscCoverage } from "@/lib/gsc-coverage";
 import { getGscDateRange } from "@/lib/date-utils";
-import { getTopKeywords, getTopPages } from "@/lib/seo-metrics";
+import { expectedCtr, getOverviewKeywordCandidates, getTopKeywords, getTopPages, type KeywordRow } from "@/lib/seo-metrics";
 
 function range(days: number) {
   const { start, end } = getGscDateRange(days);
@@ -9,17 +10,6 @@ function range(days: number) {
     start: new Date(`${start}T00:00:00.000Z`),
     end: new Date(`${end}T23:59:59.999Z`),
   };
-}
-
-/** Expected CTR curve (rough industry averages by position). */
-function expectedCtr(position: number): number {
-  if (position <= 1) return 0.28;
-  if (position <= 2) return 0.15;
-  if (position <= 3) return 0.11;
-  if (position <= 5) return 0.07;
-  if (position <= 10) return 0.03;
-  if (position <= 20) return 0.01;
-  return 0.005;
 }
 
 export type Opportunity = {
@@ -32,8 +22,10 @@ export type Opportunity = {
   severity: "high" | "medium" | "low";
 };
 
-export async function getStrikingDistance(siteId: string, limit = 25) {
-  const keywords = await getTopKeywords(siteId, 28, 200);
+// Shared by the overview's top queries and opportunity count for this render.
+export const getOverviewKeywords = cache((siteId: string, limit = 25) => getOverviewKeywordCandidates(siteId, limit));
+
+function strikingDistance(keywords: KeywordRow[], limit: number) {
   return keywords
     .filter((k) => k.position >= 4 && k.position <= 20 && k.impressions >= 20)
     .sort((a, b) => b.impressions - a.impressions)
@@ -48,8 +40,11 @@ export async function getStrikingDistance(siteId: string, limit = 25) {
     }));
 }
 
-export async function getLowCtrOpportunities(siteId: string, limit = 25) {
-  const keywords = await getTopKeywords(siteId, 28, 200);
+export async function getStrikingDistance(siteId: string, limit = 25) {
+  return strikingDistance(await getOverviewKeywords(siteId, limit), limit);
+}
+
+function lowCtrOpportunities(keywords: KeywordRow[], limit: number) {
   return keywords
     .filter((k) => k.impressions >= 50 && k.position <= 15)
     .map((k) => {
@@ -62,8 +57,12 @@ export async function getLowCtrOpportunities(siteId: string, limit = 25) {
     .slice(0, limit);
 }
 
-export async function getContentDecay(siteId: string, limit = 20) {
-  if (!(await getGscCoverage(siteId)).comparable) return [];
+export async function getLowCtrOpportunities(siteId: string, limit = 25) {
+  return lowCtrOpportunities(await getOverviewKeywords(siteId, limit), limit);
+}
+
+export async function getContentDecay(siteId: string, limit = 20, coverage = getGscCoverage(siteId)) {
+  if (!(await coverage).comparable) return [];
   const current = range(28);
   const previous = {
     start: new Date(current.start),
@@ -108,8 +107,8 @@ export async function getContentDecay(siteId: string, limit = 20) {
   return rows.sort((a, b) => a.changePct - b.changePct).slice(0, limit);
 }
 
-export async function getCannibalization(siteId: string, limit = 20) {
-  if (!(await getGscCoverage(siteId)).queryPagesComplete) return [];
+export async function getCannibalization(siteId: string, limit = 20, coverage = getGscCoverage(siteId)) {
+  if (!(await coverage).queryPagesComplete) return [];
   const r = range(28);
   const rows = await db.queryPage.findMany({
     where: {
@@ -178,13 +177,15 @@ export async function getCannibalization(siteId: string, limit = 20) {
 }
 
 export async function getAllOpportunities(siteId: string) {
-  const [striking, lowCtr, decay, cannibal, coverage] = await Promise.all([
-    getStrikingDistance(siteId, 15),
-    getLowCtrOpportunities(siteId, 15),
-    getContentDecay(siteId, 15),
-    getCannibalization(siteId, 15),
-    getGscCoverage(siteId),
+  const coverageRead = getGscCoverage(siteId);
+  const [keywords, decay, cannibal, coverage] = await Promise.all([
+    getOverviewKeywords(siteId),
+    getContentDecay(siteId, 15, coverageRead),
+    getCannibalization(siteId, 15, coverageRead),
+    coverageRead,
   ]);
+  const striking = strikingDistance(keywords, 15);
+  const lowCtr = lowCtrOpportunities(keywords, 15);
 
   const items: Opportunity[] = [];
 

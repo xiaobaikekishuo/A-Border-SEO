@@ -1,0 +1,315 @@
+name: Prepare release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/xiaobaikekishuo/a-border-seo
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      commit: ${{ steps.version.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="$(node scripts/version.mjs check "$GITHUB_REF_NAME")"
+          node scripts/version.mjs notes "$GITHUB_REF_NAME" >/dev/null
+          if [[ "${GITHUB_REPOSITORY,,}" != xiaobaikekishuo/a-border-seo ]]; then
+            echo "::error::The desktop update feed and GHCR image are configured for xiaobaikekishuo/A-Border-SEO."
+            exit 1
+          fi
+          published="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[] | select(.draft == false) | .tag_name')"
+          if grep -Fxq "$GITHUB_REF_NAME" <<< "$published"; then
+            echo "::error::This release is already public. Use a new version."
+            exit 1
+          fi
+          commit="$(git rev-parse HEAD)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+  checks:
+    needs: validate
+    uses: ./.github/workflows/check.yml
+    with:
+      release: true
+
+  backend:
+    name: Build and push tested image (${{ matrix.arch }})
+    needs: [validate, checks]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/backend-image
+        with:
+          arch: ${{ matrix.arch }}
+          version: ${{ needs.validate.outputs.version }}
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Push the image that passed the smoke test
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          staging="$IMAGE:$VERSION-$ARCH-$GITHUB_SHA"
+          docker image tag "aborder-seo-ci:$GITHUB_SHA" "$staging"
+          docker image push "$staging"
+          inspect="$(docker buildx imagetools inspect "$staging")"
+          digest="$(awk '/^Digest:/ {print $2; exit}' <<< "$inspect")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf '%s\n' "$digest" > "$RUNNER_TEMP/$ARCH.txt"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-digest-${{ matrix.arch }}
+          path: ${{ runner.temp }}/${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+  image-index:
+    name: Publish the versioned multi-architecture image
+    needs: [validate, backend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ref: ${{ steps.index.outputs.ref }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: image-digest-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/digests
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: index
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          amd64="$(cat "$RUNNER_TEMP/digests/amd64.txt")"
+          arm64="$(cat "$RUNNER_TEMP/digests/arm64.txt")"
+          for digest in "$amd64" "$arm64"; do [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; done
+          docker buildx imagetools create -t "$IMAGE:$VERSION" "$IMAGE@$amd64" "$IMAGE@$arm64"
+          inspect="$(docker buildx imagetools inspect "$IMAGE:$VERSION")"
+          digest="$(awk '/^Digest:/ {print $2; exit}' <<< "$inspect")"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "ref=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+
+  anonymous-image:
+    name: Check Windows clients can pull the backend
+    needs: [validate, image-index]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions: {}
+    env:
+      IMAGE_REF: ${{ needs.image-index.outputs.ref }}
+      VERSION: ${{ needs.validate.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+    steps:
+      - name: Pull without a registry login
+        run: |
+          set -euo pipefail
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf "$anonymous_config"' EXIT
+          if ! docker --config "$anonymous_config" pull --platform linux/amd64 "$IMAGE_REF"; then
+            echo "::error::Set GHCR package visibility to Public and re-run failed jobs."
+            exit 1
+          fi
+          test "$(docker image inspect --format '{{.Architecture}}' "$IMAGE_REF")" = amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "$IMAGE_REF")" = "$VERSION"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$IMAGE_REF")" = "$RELEASE_COMMIT"
+
+  hosted-images:
+    name: Package server-compatible runtime and control images
+    needs: [validate, checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the same Linux amd64 deployment artifacts used on the server
+        run: |
+          set -euo pipefail
+          node server/build.mjs --run "$RUNNER_TEMP/bundle"
+          node server/container/build-images.mjs --run "$RUNNER_TEMP/bundle/aborder-seo-server-$VERSION-linux-x64.tar.gz" "$RUNNER_TEMP/images"
+          cd "$RUNNER_TEMP/images"
+          sha256sum --check SHA256SUMS
+          for role in app control; do
+            docker run --rm --network none --read-only --tmpfs /tmp:rw,nosuid,nodev,size=32m "aborder-hosted-$role:$VERSION" node /tools/smoke.mjs
+          done
+          mkdir "$RUNNER_TEMP/hosted-assets"
+          gzip -1c "aborder-hosted-images-$VERSION.tar" > "$RUNNER_TEMP/hosted-assets/aborder-hosted-images-$VERSION.tar.gz"
+          cp compose.pins.env "$RUNNER_TEMP/hosted-assets/compose.pins.env"
+          maintenance=(manage-host.sh sample-connections.sh smoke-host.sh smoke.mjs OPS.md)
+          tar -C "$GITHUB_WORKSPACE/server/container" -czf "$RUNNER_TEMP/hosted-assets/aborder-hosted-ops-$VERSION.tar.gz" "${maintenance[@]}"
+          mkdir "$RUNNER_TEMP/ops-check"
+          tar -C "$RUNNER_TEMP/ops-check" -xzf "$RUNNER_TEMP/hosted-assets/aborder-hosted-ops-$VERSION.tar.gz"
+          for file in "${maintenance[@]}"; do cmp "$RUNNER_TEMP/ops-check/$file" "$GITHUB_WORKSPACE/server/container/$file"; done
+          bash -n "$RUNNER_TEMP/ops-check/manage-host.sh"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hosted-server-assets
+          path: ${{ runner.temp }}/hosted-assets
+          compression-level: 0
+          if-no-files-found: error
+
+  installer:
+    name: Build and verify Windows x64 installer
+    needs: [validate, image-index]
+    runs-on: windows-2025
+    timeout-minutes: 35
+    outputs:
+      signed: ${{ steps.package.outputs.signed }}
+    env:
+      VERSION: ${{ needs.validate.outputs.version }}
+      IMAGE_REF: ${{ needs.image-index.outputs.ref }}
+      RELEASE_COMMIT: ${{ needs.validate.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - run: npm test
+        working-directory: desktop
+      - name: Record the tested server image for this hosted release
+        run: |
+          node scripts/release-manifest.mjs $env:IMAGE_REF $env:GITHUB_REF_NAME --hosted
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $manifest = Get-Content -LiteralPath 'desktop/release-manifest.json' -Raw | ConvertFrom-Json
+          if ($manifest.commit -cne $env:RELEASE_COMMIT) { throw 'Installer and backend commits differ.' }
+      - id: package
+        name: Build and verify the signed hosted installer
+        env:
+          ABORDER_DESKTOP_MODE: hosted
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          ABORDER_WINDOWS_PUBLISHER: ${{ vars.ABORDER_WINDOWS_PUBLISHER }}
+          ABORDER_MANAGEMENT_CONFIG_JSON: ${{ vars.ABORDER_MANAGEMENT_CONFIG_JSON }}
+        run: |
+          if (-not $env:WIN_CSC_LINK -or -not $env:ABORDER_WINDOWS_PUBLISHER) {
+            throw 'Configure the Windows signing certificate and publisher before building a release.'
+          }
+          node scripts/stage-management-config.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm --prefix desktop run package:win
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/verify-installer.ps1 -Hosted -Version $env:VERSION -Publisher $env:ABORDER_WINDOWS_PUBLISHER -InstallSmoke
+          "signed=true" >> $env:GITHUB_OUTPUT
+      - name: Assemble release assets
+        run: |
+          $assets = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP 'release-assets')
+          $name = "A-Border-SEO-Setup-$($env:VERSION)-x64.exe"
+          foreach ($file in @($name, "$name.blockmap", 'latest.yml')) {
+            Copy-Item -LiteralPath (Join-Path 'desktop/dist' $file) -Destination $assets.FullName
+          }
+          Copy-Item -LiteralPath 'desktop/release-manifest.json' -Destination (Join-Path $assets.FullName 'desktop-release.json')
+          node scripts/version.mjs notes $env:GITHUB_REF_NAME | Set-Content -Encoding utf8 -LiteralPath (Join-Path $assets.FullName 'RELEASE-NOTES.md')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $checksums = Get-ChildItem -LiteralPath $assets.FullName -File | Sort-Object Name | ForEach-Object {
+            "$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
+          }
+          [IO.File]::WriteAllText((Join-Path $assets.FullName 'SHA256SUMS.txt'), ($checksums -join [char]10) + [char]10)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-release-assets
+          path: ${{ runner.temp }}/release-assets
+          if-no-files-found: error
+
+  draft:
+    name: Stage verified assets as a GitHub draft
+    needs: [installer, anonymous-image, hosted-images]
+    if: needs.installer.outputs.signed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-release-assets
+          path: release-assets
+      - uses: actions/download-artifact@v8
+        with:
+          name: hosted-server-assets
+          path: release-assets
+      - name: Stage the entire release before making it visible
+        working-directory: release-assets
+        run: |
+          set -euo pipefail
+          sha256sum aborder-hosted-images-*.tar.gz aborder-hosted-ops-*.tar.gz compose.pins.env >> SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+          assets=(A-Border-SEO-Setup-*.exe A-Border-SEO-Setup-*.exe.blockmap latest.yml desktop-release.json RELEASE-NOTES.md SHA256SUMS.txt aborder-hosted-images-*.tar.gz aborder-hosted-ops-*.tar.gz compose.pins.env)
+          existing="$(gh api "repos/$GH_REPO/releases" --paginate --jq '.[] | [.tag_name, .draft] | @tsv')"
+          if grep -Fxq "$GITHUB_REF_NAME"$'\ttrue' <<< "$existing"; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
+            gh release edit "$GITHUB_REF_NAME" --notes-file RELEASE-NOTES.md
+          elif grep -Fxq "$GITHUB_REF_NAME"$'\tfalse' <<< "$existing"; then
+            echo "::error::This release is already public. Use a new version."
+            exit 1
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --draft \
+              --title "A-Border SEO $GITHUB_REF_NAME" --notes-file RELEASE-NOTES.md "${assets[@]}"
+          fi
+          echo "Draft is ready. To publish it after review, run:"
+          echo "gh release edit $GITHUB_REF_NAME --repo $GH_REPO --draft=false --latest"

@@ -6,7 +6,6 @@ import { useUiText, identityUiText, type UiTranslator } from "@/components/ui/ui
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { signIn } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { useHeaderStatus } from "@/components/ui/header-status";
 import { formatDay } from "@/lib/format";
@@ -153,7 +152,7 @@ export function SyncButton({
       {outcome.tone === "reauth" && (
         <>
           {" "}
-          <button type="button" onClick={() => signIn("google")} className="text-link font-medium">
+          <button type="button" onClick={() => router.push("/settings?connect=google#connection-google")} className="text-link font-medium">
             {ui("Reconnect")}</button>
         </>
       )}

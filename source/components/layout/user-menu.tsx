@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils";
 import { Avatar } from "@/components/account/avatar";
 import { signOutAction } from "@/app/(dashboard)/settings/actions";
 import type { AvailableUpdate } from "@/lib/update-check";
+import { desktopBridge } from "@/lib/desktop/client";
 
 const ITEM_CLASS =
   "flex h-9 w-full cursor-default items-center gap-2.5 rounded-sm px-2.5 text-[14px] text-text-strong outline-none select-none data-highlighted:bg-bg-section";
@@ -37,6 +38,8 @@ export function UserMenu({
 }) {
   const ui = useUiText();
   const label = name?.trim() || email || ui("Account");
+  const managed = email?.endsWith("@managed.invalid") === true;
+  const displayedEmail = managed ? (ui.locale === "zh" ? "客户端注册账号" : "Registered desktop account") : email;
   const [signingOut, startSignOut] = useTransition();
 
   return (
@@ -63,9 +66,9 @@ export function UserMenu({
         <Menu.Portal>
           <Menu.Positioner side="top" align="start" sideOffset={6} className="isolate z-50 outline-none">
             <Menu.Popup className="min-w-[208px] rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-[var(--shadow-3)] outline-none">
-              {email && (
-                <p className="truncate px-2.5 pt-1.5 pb-2 text-[12px] leading-4 text-muted-foreground" title={email}>
-                  {email}
+              {displayedEmail && (
+                <p className="truncate px-2.5 pt-1.5 pb-2 text-[12px] leading-4 text-muted-foreground" title={displayedEmail}>
+                  {displayedEmail}
                 </p>
               )}
               <Menu.LinkItem render={<Link href="/settings" />} closeOnClick className={ITEM_CLASS}>
@@ -75,7 +78,11 @@ export function UserMenu({
                 className={ITEM_CLASS}
                 disabled={signingOut}
                 closeOnClick={false}
-                onClick={() => startSignOut(() => signOutAction())}
+                onClick={() => startSignOut(async () => {
+                  const logout = managed ? desktopBridge()?.logout : undefined;
+                  if (logout) await logout();
+                  else await signOutAction();
+                })}
               >
                 {signingOut ? (
                   <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden />

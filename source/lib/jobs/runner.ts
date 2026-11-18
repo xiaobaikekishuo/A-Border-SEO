@@ -1,6 +1,9 @@
 import { randomBytes } from "crypto";
 import { hostname } from "os";
 import type { Job, Prisma, PrismaClient } from "@prisma/client";
+import { managedAllowsJob } from "@/lib/managed/policy";
+import { managedSiteAllows } from "@/lib/managed/worker-owner";
+import { hostedJobAllows } from "./hosted-policy";
 import { isServerless } from "./config";
 import { getJobHandler } from "./handlers";
 import {
@@ -64,6 +67,10 @@ export class JobRunner {
   }
 
   async execute(job: Job, opts: { deadline?: number } = {}): Promise<JobRun> {
+    if (!managedAllowsJob(job.type) || !await managedSiteAllows(this.db, job.siteId) || !await hostedJobAllows(this.db, job)) {
+      const released = await releaseJob(this.db, job, this.workerId);
+      return { outcome: released ? "released" : "lost", followUps: [] };
+    }
     const handler = getJobHandler(job.type);
     const entry: Running = { job, handler, controller: new AbortController(), state: "running" };
     this.running.set(job.id, entry);
@@ -147,6 +154,7 @@ export class JobRunner {
           ...next,
           siteId: job.siteId,
           source: "chain",
+          hostedDeviceId: job.hostedDeviceId,
         });
         if (isNew) queued.push(created);
       } catch (err) {
@@ -187,6 +195,12 @@ export class JobRunner {
   async heartbeat(now: Date = new Date()): Promise<void> {
     const ids = [...this.running.keys()];
     if (ids.length === 0) return;
+    for (const entry of this.running.values()) {
+      if (entry.state === "running" && (!await managedSiteAllows(this.db, entry.job.siteId) || !await hostedJobAllows(this.db, entry.job))) {
+        entry.state = "releasing";
+        entry.controller.abort(new JobReleasedError());
+      }
+    }
     const held = await heartbeatJobs(this.db, { workerId: this.workerId, jobIds: ids, now });
     for (const id of ids) {
       const entry = this.running.get(id);

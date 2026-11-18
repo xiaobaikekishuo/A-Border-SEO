@@ -1,0 +1,32 @@
+FROM postgres:16-bookworm AS pgtools
+RUN mkdir -p /pg-runtime && for executable in pg_dump pg_restore psql pg_isready; do \
+      binary="/usr/lib/postgresql/16/bin/$executable"; \
+      cp -L --parents "$binary" /pg-runtime/; \
+      ldd "$binary" | awk '{for(i=1;i<=NF;i++) if($i ~ /^\//) print $i}' | \
+        while IFS= read -r library; do \
+          case "$library" in /lib/*|/lib64/*) target="/usr$library" ;; *) target="$library" ;; esac; \
+          mkdir -p "/pg-runtime$(dirname "$target")"; \
+          cp -L "$library" "/pg-runtime$target"; \
+        done; \
+    done
+FROM node:24-bookworm-slim
+ARG BUNDLE_SHA256
+ARG RELEASE_VERSION
+LABEL com.aborder-seo.role="hosted-app" com.aborder-seo.version="${RELEASE_VERSION}"
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
+COPY --from=pgtools /pg-runtime/ /
+COPY bundle.tar.gz /tmp/bundle.tar.gz
+RUN echo "$BUNDLE_SHA256  /tmp/bundle.tar.gz" | sha256sum --check - \
+    && mkdir -p /opt/aborder /tools /var/cache/aborder \
+    && tar --no-same-owner -xzf /tmp/bundle.tar.gz -C /opt/aborder \
+    && rm /tmp/bundle.tar.gz \
+    && node --input-type=module -e 'import {verifyBundle} from "/opt/aborder/server/deploy/common.mjs"; const m=verifyBundle("/opt/aborder"); if(m.version!==process.env.RELEASE_VERSION)process.exit(1)' \
+    && /usr/lib/postgresql/16/bin/pg_dump --version \
+    && node --version \
+    && ln -s /var/cache/aborder /opt/aborder/app/.next/cache \
+    && chown -R 10001:10001 /var/cache/aborder
+COPY start.mjs database.mjs smoke.mjs /tools/
+WORKDIR /opt/aborder/app
+USER 10001:10001
+ENTRYPOINT []
+CMD ["node", "--max-old-space-size=512", "/tools/start.mjs", "app"]

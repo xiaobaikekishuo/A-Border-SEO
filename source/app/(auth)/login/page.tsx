@@ -3,7 +3,8 @@ import { LanguageSwitcher } from "@/components/layout/language-switcher";
 import { getI18n } from "@/lib/i18n/server";
 import { signIn, auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { Button } from "@/components/ui/button";
+import { LoginForm } from "@/components/account/login-form";
+import { ManagedLoginPrompt } from "@/components/account/managed-login-prompt";
 import { Logo } from "@/components/brand/logo";
 import { registrationClosedMessage, DEFAULT_REGISTRATION_CLOSED_MESSAGE } from "@/lib/registration";
 import { Activity, Search, ShieldCheck } from "lucide-react";
@@ -50,6 +51,7 @@ export default async function LoginPage({
   const params = await searchParams;
   const error = errorMessage(params.error, t);
   const notice = noticeMessage(params.notice, t);
+  const managed = process.env.ABORDER_MANAGED === "1" || process.env.ABORDER_HOSTED === "1";
 
   return (
     <div className="flex min-h-dvh items-center justify-center px-5 py-12 sm:px-8">
@@ -65,7 +67,8 @@ export default async function LoginPage({
         <div className="rounded-2xl border border-border bg-card p-7 shadow-[var(--shadow-3)] sm:p-9">
           <h2 className="text-[24px] leading-8 font-semibold tracking-[-0.025em] text-text-strong">{t("Sign in", "登录")}</h2>
           <p className="mt-2.5 text-[13px] leading-6 text-muted-foreground">
-            {t("Connect Google Search Console with read-only access.", "以只读权限连接 Google Search Console。")}</p>
+            {managed ? t("Your account, your workspace.", "登录你的账号，进入你的工作台。")
+              : t("Connect Google Search Console with read-only access.", "以只读权限连接 Google Search Console。")}</p>
 
           {notice && (
             <p role="status" className="mt-5 rounded-xl border border-border bg-bg-section px-4 py-3 text-[13px] leading-6 text-text">
@@ -79,16 +82,13 @@ export default async function LoginPage({
             </p>
           )}
 
-          <form
-            className="mt-7"
-            action={async () => {
+          {managed ? <ManagedLoginPrompt /> : <LoginForm
+            label={t("Continue with Google", "使用 Google 继续")}
+            webAction={async () => {
               "use server";
               await signIn("google", { redirectTo: "/sites" });
             }}
-          >
-            <Button type="submit" size="lg" className="h-12 w-full rounded-xl">
-              {t("Continue with Google", "使用 Google 继续")}</Button>
-          </form>
+          />}
 
           <ul className="mt-7 space-y-3 border-t border-border pt-6 text-[12px] leading-5 text-muted-foreground">
             <li className="flex items-start gap-2.5"><Search className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden />{t("Keywords, positions and CTR from GSC", "来自 GSC 的关键词、排名和点击率")}</li>

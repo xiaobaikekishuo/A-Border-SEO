@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { ExternalLink } from "lucide-react";
+import { hasDesktopBridge } from "@/lib/desktop/client";
 import { useI18n } from "@/lib/i18n/client";
 
 const noSubscribe = () => () => {};
@@ -8,6 +9,7 @@ export function Ga4SetupGuide({domain, oauthClientId}: {domain:string; oauthClie
   const {t} = useI18n();
   // The origin this browser actually uses (the port can change with LOCAL_APP_PORT).
   const origin = useSyncExternalStore(noSubscribe, () => window.location.origin, () => "http://localhost:3300");
+  const desktop = useSyncExternalStore(noSubscribe, hasDesktopBridge, () => false);
   const project = oauthClientId?.split("-")[0];
   const cloud = (path:string) => "https://console.cloud.google.com/" + path + (project ? "?project=" + project : "");
   const link = "inline-flex items-center gap-1 text-link underline underline-offset-2";
@@ -41,8 +43,13 @@ export function Ga4SetupGuide({domain, oauthClientId}: {domain:string; oauthClie
         <strong>{t("Allow this local browser origin", "为已有的 Web 客户端添加本地来源")}</strong>
         <p>{t("Open Google Auth Platform → Clients. Open the Web application used to sign in to this workbench. Match its Client ID to the one shown below when available.", "进入 Google Auth Platform →「客户端」，打开用于登录本工作台的「Web 应用」客户端。有多个客户端时，按客户端 ID 核对。")}</p>
         {oauthClientId && <p><span>{t("Workbench client ID", "工作台客户端 ID")} </span><code className={code}>{oauthClientId}</code></p>}
-        <p>{t("Under Authorized JavaScript origins, click Add URI for each missing entry below. Enter one origin per row, keep your existing entries, and save.", "找到「已获授权的 JavaScript 来源」。对尚未列出的地址分别点「添加 URI」，每行填一个，保留原有条目，然后点「保存」。")}</p>
-        <div className="grid justify-items-start gap-1"><code className={code}>http://localhost</code><code className={code}>{origin}</code></div>
+        {desktop ? <>
+          <p>{t("Under Authorized redirect URIs, add the desktop report callback below and keep the existing sign-in callback.", "在「已获授权的重定向 URI」中添加下方的桌面报表回调，并保留原有登录回调。")}</p>
+          <code className={code}>{origin}/desktop/oauth/ga4/callback</code>
+        </> : <>
+          <p>{t("Under Authorized JavaScript origins, click Add URI for each missing entry below. Enter one origin per row, keep your existing entries, and save.", "找到「已获授权的 JavaScript 来源」。对尚未列出的地址分别点「添加 URI」，每行填一个，保留原有条目，然后点「保存」。")}</p>
+          <div className="grid justify-items-start gap-1"><code className={code}>http://localhost</code><code className={code}>{origin}</code></div>
+        </>}
         <a className={link} href={cloud("auth/clients")} target="_blank" rel="noreferrer">{t("Open OAuth clients", "打开 OAuth 客户端")} <ExternalLink size={14} aria-hidden="true" /></a>
       </li>
       <li className={step}>
@@ -56,7 +63,9 @@ export function Ga4SetupGuide({domain, oauthClientId}: {domain:string; oauthClie
       <ul className="mt-2 list-disc space-y-2 pl-5 text-muted-foreground">
         <li>{t("GA4 says you lack permission: switch to the Google account that can view this website in Analytics, or ask the property administrator for Viewer access.", "GA4 提示「缺少权限」时，切换到能查看本站 Analytics 报表的 Google 账号，或请媒体资源管理员授予「查看者」权限。")}</li>
         <li>{t("Google says the app is in testing and returns 403 access_denied: check the project and exact test email in step 3.", "Google 提示应用正在测试并显示 403 access_denied 时，回到第 3 步，核对项目和测试用户邮箱。")}</li>
-        <li>{t("For origin_mismatch, check the client and both local origins in step 4. For an API-disabled error, revisit step 2.", "看到 origin_mismatch 时，核对第 4 步的客户端和两条本地来源。提示 API 未启用时，检查第 2 步。")}</li>
+        <li>{desktop
+          ? t("For redirect_uri_mismatch, check the exact callback in step 4. For an API-disabled error, revisit step 2.", "看到 redirect_uri_mismatch 时，核对第 4 步的完整回调地址。提示 API 未启用时，检查第 2 步。")
+          : t("For origin_mismatch, check the client and both local origins in step 4. For an API-disabled error, revisit step 2.", "看到 origin_mismatch 时，核对第 4 步的客户端和两条本地来源。提示 API 未启用时，检查第 2 步。")}</li>
       </ul>
     </details>
   </details>;

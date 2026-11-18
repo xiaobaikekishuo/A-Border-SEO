@@ -85,4 +85,17 @@ describe("site settings", () => {
       expect.objectContaining({ where: { userId_provider: { userId: "user-1", provider: "bing" } } })
     );
   });
+
+  it("offers a separate Search Console connection for a manually added site", async () => {
+    db.site.findUnique.mockResolvedValue({
+      userId: "user-1", domain: "quayline.app", gscProperty: null, bingSite: null,
+      createdAt: new Date("2026-09-01T00:00:00Z"),
+      _count: { keywords: 0, pages: 0, crawls: 0, vitals: 0, alerts: 0, savedKeywords: 0 },
+    });
+    const html = await render();
+    expect(html).toContain('id="gsc-connection"');
+    expect(html).toContain("Connect Google");
+    expect(html).toContain("Refresh properties");
+    expect(html).not.toContain("Sync GSC");
+  });
 });

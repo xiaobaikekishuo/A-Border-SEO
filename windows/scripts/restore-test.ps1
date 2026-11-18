@@ -1,7 +1,7 @@
-#requires -Version 7.0
+#requires -Version 7.3
 [CmdletBinding()]
-param([string]$BackupDirectory='')
-. (Join-Path $PSScriptRoot 'common.ps1')
+param([string]$BackupDirectory = '', [string]$DataRoot = '', [string]$DockerContext = '', [string]$Project = '')
+. (Join-Path $PSScriptRoot 'common.ps1') -DataRoot $DataRoot -DockerContext $DockerContext -Project $Project
 $db=Get-SeoDatabase
 $backupsRoot=Join-Path $script:SeoRoot 'backups'
 if(-not $BackupDirectory){

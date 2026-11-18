@@ -25,31 +25,19 @@ export async function GET(
       orderBy: { createdAt: "desc" },
     });
 
-    // Fetch latest rank data for each saved keyword
-    const withRankData = await Promise.all(
-      savedKeywords.map(async (sk) => {
-        const latestKeyword = await db.keyword.findFirst({
-          where: { siteId, query: sk.query },
-          orderBy: { date: "desc" },
-          select: {
-            clicks: true,
-            impressions: true,
-            ctr: true,
-            position: true,
-            page: true,
-            date: true,
-          },
-        });
-
-        return {
-          id: sk.id,
-          query: sk.query,
-          notes: sk.notes,
-          createdAt: sk.createdAt,
-          latestRank: latestKeyword,
-        };
-      })
-    );
+    const latest = savedKeywords.length ? await db.$queryRaw<Array<{
+      query: string; clicks: number; impressions: number; ctr: number; position: number; page: string | null; date: Date;
+    }>>`
+      SELECT DISTINCT ON (k.query) k.query, k.clicks, k.impressions, k.ctr, k.position, k.page, k.date
+      FROM "SavedKeyword" sk JOIN "Keyword" k ON k."siteId" = sk."siteId" AND k.query = sk.query
+      JOIN "GscSyncCoverage" c ON c."siteId" = k."siteId" AND c.date = k.date AND c."queryPagesComplete"
+      JOIN "Site" s ON s.id = c."siteId" AND s."gscProperty" = c."gscProperty"
+      WHERE sk."siteId" = ${siteId}
+      ORDER BY k.query, k.date DESC` : [];
+    const byQuery = new Map(latest.map(({ query, ...metrics }) => [query, metrics]));
+    const withRankData = savedKeywords.map(({ id, query, notes, createdAt }) => ({
+      id, query, notes, createdAt, latestRank: byQuery.get(query) ?? null,
+    }));
 
     return Response.json(withRankData);
   } catch (error) {

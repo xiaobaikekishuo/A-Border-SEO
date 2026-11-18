@@ -1,0 +1,19 @@
+x-managed-policy: &managed-policy
+  type: bind
+  source: ${ABORDER_DESKTOP_MANAGED_DIR:?desktop_managed_directory_required}
+  target: /run/aborder-managed
+  read_only: true
+  bind:
+    create_host_path: false
+x-managed-env: &managed-env
+  ABORDER_MANAGED: "1"
+  ABORDER_MANAGED_POLICY_DIR: /run/aborder-managed
+services:
+  app:
+    environment: *managed-env
+    volumes:
+      - *managed-policy
+  worker:
+    environment: *managed-env
+    volumes:
+      - *managed-policy

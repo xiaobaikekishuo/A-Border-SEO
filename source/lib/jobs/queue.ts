@@ -1,7 +1,13 @@
 import { Prisma, type Job, type PrismaClient } from "@prisma/client";
+import { desktopMaintenanceActive } from "@/lib/desktop/maintenance";
+import { managedAllows, managedAllowsJob, managedDecision } from "@/lib/managed/policy";
+import { managedUserScope } from "@/lib/managed/identity";
+import { managedSiteAllows } from "@/lib/managed/worker-owner";
 import { isServerless, queueConfig } from "./config";
 import { getJobHandler } from "./handlers";
-import { INTERRUPTED_JOB_MESSAGE, INTERRUPTED_RUN_AGAIN_MESSAGE, type JobSource } from "./types";
+import { hostedMode } from "@/lib/hosted/access";
+import { enqueueHostedDevice, hostedJobAllows } from "./hosted-policy";
+import { INTERRUPTED_JOB_MESSAGE, INTERRUPTED_RUN_AGAIN_MESSAGE, JobError, type JobSource } from "./types";
 
 /*
  * The Postgres job queue. Every state change that a process makes to a job it
@@ -46,6 +52,8 @@ export type EnqueueInput = {
    * not fold into one already queued). Default true.
    */
   unique?: boolean;
+  /** Internal follow-up provenance. Request entry points derive this from the session. */
+  hostedDeviceId?: string | null;
 };
 
 /**
@@ -59,6 +67,10 @@ export async function enqueueJob(
 ): Promise<{ job: Job; created: boolean }> {
   const handler = getJobHandler(input.type);
   if (!handler) throw new Error(`Unknown job type: ${input.type}`);
+  if (!await managedSiteAllows(db, input.siteId)) {
+    throw new JobError("This site is not owned by the signed-in managed account.", { code: "MANAGED_OWNER_RESTRICTED" });
+  }
+  const hostedDeviceId = await enqueueHostedDevice(db, input);
   const activeKey = input.unique === false ? null : activeKeyFor(input.type, input.siteId);
 
   // INSERT ... ON CONFLICT DO NOTHING: the unique activeKey makes a second
@@ -66,6 +78,11 @@ export async function enqueueJob(
   // active job can finish between the insert and the lookup; then the next
   // insert goes through.
   for (let i = 0; i < 3; i++) {
+    // A running job may record its follow-ups as part of settling. The claim
+    // gate keeps the follow-ups queued until their features are available.
+    if (input.source !== "chain" && !managedAllowsJob(input.type)) {
+      throw new JobError("The management policy paused this job.", { code: "MANAGED_RESTRICTED" });
+    }
     const [job] = await db.job.createManyAndReturn({
       data: [
         {
@@ -77,6 +94,7 @@ export async function enqueueJob(
           runAt: input.runAt ?? new Date(),
           maxAttempts: handler.maxAttempts,
           activeKey,
+          ...(hostedMode() && { hostedDeviceId }),
         },
       ],
       skipDuplicates: true,
@@ -95,17 +113,67 @@ const CLAIM_ORDER: Prisma.JobOrderByWithRelationInput[] = [
   { createdAt: "asc" },
 ];
 
+/** Check remote policy before taking database locks, then claim rows atomically. */
+async function claimHostedJobs(db: Db, opts: { workerId: string; types?: string[]; jobId?: string; limit: number; now: Date }): Promise<Job[]> {
+  if (opts.limit < 1 || desktopMaintenanceActive()) return [];
+  const eligible: string[] = [];
+  let cursor: string | undefined;
+  const decisions = new Map<string, Promise<boolean>>();
+  while (eligible.length < opts.limit) {
+    const candidates = await db.job.findMany({
+      where: { status: "QUEUED", runAt: { lte: opts.now }, ...(opts.types && { type: { in: opts.types } }), ...(opts.jobId && { id: opts.jobId }) },
+      select: { id: true, type: true, siteId: true, hostedDeviceId: true },
+      orderBy: [...CLAIM_ORDER, { id: "asc" }], take: 50,
+      ...(cursor && { cursor: { id: cursor }, skip: 1 }),
+    });
+    if (!candidates.length) break;
+    for (let offset = 0; offset < candidates.length && eligible.length < opts.limit; offset += 5) {
+      const batch = candidates.slice(offset, offset + 5);
+      const allowed = await Promise.all(batch.map(job => {
+        const key = JSON.stringify([job.siteId, job.type.startsWith("geo-"), job.hostedDeviceId]);
+        if (!decisions.has(key)) decisions.set(key, hostedJobAllows(db, job));
+        return decisions.get(key)!;
+      }));
+      for (let i = 0; i < batch.length && eligible.length < opts.limit; i++) if (allowed[i]) eligible.push(batch[i].id);
+    }
+    cursor = candidates[candidates.length - 1].id;
+    if (candidates.length < 50 || opts.jobId) break;
+  }
+  if (!eligible.length || desktopMaintenanceActive()) return [];
+  return db.$transaction(async tx => {
+    const rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT "id" FROM "Job" WHERE "id" = ANY(${eligible}::text[])
+        AND "status" = 'QUEUED' AND "runAt" <= ${sqlTime(opts.now)}
+      ORDER BY "priority" DESC, "runAt" ASC, "createdAt" ASC
+      LIMIT ${opts.limit} FOR UPDATE SKIP LOCKED`;
+    const ids = rows.map(row => row.id);
+    if (!ids.length) return [];
+    await tx.job.updateMany({ where: { id: { in: ids }, status: "QUEUED" }, data: {
+      status: "RUNNING", lockedBy: opts.workerId, lockedAt: opts.now,
+      heartbeatAt: opts.now, startedAt: opts.now, attempts: { increment: 1 },
+    } });
+    return tx.job.findMany({ where: { id: { in: ids } }, orderBy: CLAIM_ORDER });
+  });
+}
+
 async function claim(
   db: Db,
   workerId: string,
   now: Date,
-  pick: (tx: Prisma.TransactionClient) => Promise<{ id: string }[]>
+  pick: (tx: Prisma.TransactionClient, scope: Awaited<ReturnType<typeof managedUserScope>>) => Promise<{ id: string; type: string }[]>
 ): Promise<Job[]> {
+  if (desktopMaintenanceActive() || !managedAllows("jobs")) return [];
+  const scope = await managedUserScope(db);
+  if (scope.managed && !scope.userId) return [];
   return db.$transaction(async (tx) => {
     // The rows stay locked until the transaction ends, and SKIP LOCKED makes
     // every other claimer pass over them: no job is claimed twice.
-    const ids = (await pick(tx)).map((r) => r.id);
-    if (ids.length === 0) return [];
+    const candidates = await pick(tx, scope);
+    const current = await managedUserScope(tx);
+    if (current.managed !== scope.managed || current.userId !== scope.userId) return [];
+    const decision = managedDecision();
+    const ids = candidates.filter((row) => managedAllowsJob(row.type, decision)).map((row) => row.id);
+    if (ids.length === 0 || desktopMaintenanceActive()) return [];
     await tx.job.updateMany({
       where: { id: { in: ids } },
       data: {
@@ -127,10 +195,14 @@ export async function claimJobs(
   opts: { workerId: string; types: string[]; limit: number; now?: Date }
 ): Promise<Job[]> {
   const now = opts.now ?? new Date();
-  if (opts.limit < 1 || opts.types.length === 0) return [];
-  return claim(db, opts.workerId, now, (tx) => tx.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "Job"
-    WHERE "status" = 'QUEUED' AND "runAt" <= ${sqlTime(now)} AND "type" = ANY(${opts.types}::text[])
+  if (hostedMode()) return claimHostedJobs(db, { ...opts, now });
+  const decision = managedDecision();
+  const types = opts.types.filter((type) => managedAllowsJob(type, decision));
+  if (opts.limit < 1 || types.length === 0) return [];
+  return claim(db, opts.workerId, now, (tx, scope) => tx.$queryRaw<{ id: string; type: string }[]>`
+    SELECT "id", "type" FROM "Job"
+    WHERE "status" = 'QUEUED' AND "runAt" <= ${sqlTime(now)} AND "type" = ANY(${types}::text[])
+      AND (${!scope.managed}::boolean OR "siteId" IN (SELECT "id" FROM "Site" WHERE "userId" = ${scope.userId ?? ""}))
     ORDER BY "priority" DESC, "runAt" ASC, "createdAt" ASC
     LIMIT ${opts.limit}
     FOR UPDATE SKIP LOCKED`);
@@ -142,9 +214,11 @@ export async function claimJobById(
   opts: { workerId: string; jobId: string; now?: Date }
 ): Promise<Job | null> {
   const now = opts.now ?? new Date();
-  const [job] = await claim(db, opts.workerId, now, (tx) => tx.$queryRaw<{ id: string }[]>`
-    SELECT "id" FROM "Job"
+  if (hostedMode()) return (await claimHostedJobs(db, { ...opts, now, limit: 1 }))[0] ?? null;
+  const [job] = await claim(db, opts.workerId, now, (tx, scope) => tx.$queryRaw<{ id: string; type: string }[]>`
+    SELECT "id", "type" FROM "Job"
     WHERE "id" = ${opts.jobId} AND "status" = 'QUEUED' AND "runAt" <= ${sqlTime(now)}
+      AND (${!scope.managed}::boolean OR "siteId" IN (SELECT "id" FROM "Site" WHERE "userId" = ${scope.userId ?? ""}))
     FOR UPDATE SKIP LOCKED`);
   return job ?? null;
 }
@@ -273,9 +347,12 @@ export async function recoverStaleJobs(
 ): Promise<{ requeued: number; failed: number }> {
   const now = opts.now ?? new Date();
   const cutoff = new Date(now.getTime() - (opts.staleMs ?? queueConfig().staleMs));
+  const scope = await managedUserScope(db);
+  if (scope.managed && !scope.userId) return { requeued: 0, failed: 0 };
   const stale = await db.job.findMany({
     where: {
       status: "RUNNING",
+      ...(scope.managed && { site: { userId: scope.userId! } }),
       ...(opts.siteId && { siteId: opts.siteId }),
       OR: [{ heartbeatAt: { lt: cutoff } }, { heartbeatAt: null, lockedAt: { lt: cutoff } }],
     },

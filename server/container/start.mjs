@@ -1,0 +1,14 @@
+const role = process.argv[2];
+if (!["app", "worker"].includes(role)) throw new Error("Invalid container service role.");
+if (process.env.ABORDER_CONTROL_INTERNAL_URL !== "http://127.0.0.1:18086") throw new Error("Internal control must remain in the shared loopback namespace.");
+process.env.NODE_ENV = "production";
+process.env.ABORDER_HOSTED = "1";
+process.env.ABORDER_MANAGED = "0";
+process.env.HOSTNAME = "0.0.0.0";
+process.env.PORT = "18330";
+process.env.WORKER_MODE = role === "app" ? "off" : "worker";
+process.env.WORKER_LONG_CONCURRENCY = "1";
+process.env.WORKER_SHORT_CONCURRENCY = "1";
+process.env.WORKER_SHUTDOWN_GRACE_SECONDS = "35";
+process.chdir("/opt/aborder/app");
+await import(role === "app" ? "/opt/aborder/app/server.js" : "/opt/aborder/app/worker.cjs");

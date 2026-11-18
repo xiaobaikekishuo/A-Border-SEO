@@ -1,10 +1,35 @@
 import { getAccessToken } from "./google-auth";
 import { googleFetch } from "./google-fetch";
 import { aggregateByQueryAndDate } from "./aggregate";
+import { gscDate } from "./gsc-date";
 import type { KeywordData } from "./types";
 export type { KeywordData } from "./types";
 
 const GSC_API_BASE = "https://www.googleapis.com/webmasters/v3";
+
+/** Daily property-level totals. Never reconstruct an omitted date as zero. */
+export async function fetchPropertyAnalytics(userId: string, siteUrl: string, startDate: string, endDate: string) {
+  const token = await getAccessToken(userId);
+  const response = await googleFetch(`${GSC_API_BASE}/sites/${encodeURIComponent(siteUrl)}/searchAnalytics/query`, {
+    method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ startDate, endDate, type: "web", dataState: "final", dimensions: ["date"],
+      aggregationType: "byProperty", rowLimit: 25000 }),
+  });
+  if (!response.ok) throw new Error(`Failed to fetch property analytics: ${response.status}`);
+  const data = await response.json() as { responseAggregationType?: string; rows?: SearchAnalyticsRow[] };
+  if (data.responseAggregationType !== "byProperty" && (data.responseAggregationType !== undefined || data.rows?.length)) {
+    throw new Error("Unexpected GSC property aggregation");
+  }
+  const seen = new Set<string>();
+  return (data.rows ?? []).map(row => {
+    const date = row.keys[0];
+    if (row.keys.length !== 1 || !date || !gscDate(date) || date < startDate || date > endDate || seen.has(date) ||
+      !Number.isSafeInteger(row.clicks) || row.clicks < 0 || !Number.isSafeInteger(row.impressions) ||
+      row.impressions < 0 || !Number.isFinite(row.position) || row.position < 0) throw new Error("Invalid daily GSC property row");
+    seen.add(date);
+    return { date, clicks: row.clicks, impressions: row.impressions, position: row.position };
+  });
+}
 
 interface GSCProperty {
   siteUrl: string;

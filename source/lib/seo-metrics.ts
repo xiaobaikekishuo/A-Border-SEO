@@ -1,5 +1,6 @@
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
-import { getGscCoverage } from "@/lib/gsc-coverage";
+import { gscComparisonWindows } from "@/lib/gsc-coverage";
 import { calculatePercentChange, getGscDateRange } from "@/lib/date-utils";
 
 export type PeriodMetrics = {
@@ -77,247 +78,149 @@ function aggregatePeriod(
   };
 }
 
-export async function getSitePeriodMetrics(
-  siteId: string,
-  days = 28
-): Promise<{
-  current: PeriodMetrics;
-  previous: PeriodMetrics;
-  coverage: Awaited<ReturnType<typeof getGscCoverage>>;
-  deltas: {
-    clicks: number | null;
-    impressions: number | null;
-    avgPosition: number | null;
-    avgCtr: number | null;
-  };
-}> {
-  const coverage = await getGscCoverage(siteId, days);
-  const currentRange = parseRange({ startDate: coverage.current.start, endDate: coverage.current.end });
-  const prevRange = parseRange({ startDate: coverage.previous.start, endDate: coverage.previous.end });
+type ReportDay = { date: string; clicks: number; impressions: number; position: number };
 
-  // Site-wide traffic totals come from the Page model (GSC page-level data),
-  // NOT Keyword. Google suppresses query text for low-volume searches
-  // ("anonymized queries"), so those searches never appear as Keyword rows.
-  // Totals use API-reported page rows. These may differ from property-level GSC totals.
-  const [currentPages, previousPages, currentKwCount, previousKwCount] =
-    await Promise.all([
-      db.page.findMany({
-        where: {
-          siteId,
-          date: { gte: currentRange.start, lte: currentRange.end },
-        },
-        select: { clicks: true, impressions: true, position: true },
-      }),
-      db.page.findMany({
-        where: {
-          siteId,
-          date: { gte: prevRange.start, lte: prevRange.end },
-        },
-        select: { clicks: true, impressions: true, position: true },
-      }),
-      // Unique keyword count still comes from Keyword — it's genuinely query-level.
-      db.keyword
-        .groupBy({
-          by: ["query"],
-          where: {
-            siteId,
-            date: { gte: currentRange.start, lte: currentRange.end },
-          },
-        })
-        .then((rows) => rows.length),
-      db.keyword
-        .groupBy({
-          by: ["query"],
-          where: {
-            siteId,
-            date: { gte: prevRange.start, lte: prevRange.end },
-          },
-        })
-        .then((rows) => rows.length),
-    ]);
+/** Select one basis for the whole period, from the currently bound property only. */
+async function loadSearchSeries(tx: Prisma.TransactionClient, siteId: string, period: Period) {
+  const { start, end } = parseRange(period);
+  const site = await tx.site.findUnique({ where: { id: siteId }, select: { gscProperty: true } });
+  const coverage = site?.gscProperty ? await tx.gscSyncCoverage.findMany({
+    where: { siteId, gscProperty: site.gscProperty, date: { gte: start, lte: end } },
+    select: { date: true, pagesComplete: true, queryPagesComplete: true, syncedAt: true,
+      propertyChecked: true, propertyClicks: true, propertyImpressions: true, propertyPosition: true },
+    orderBy: { date: "asc" },
+  }) : [];
+  const basis = coverage.some(day => day.propertyChecked) ? "property" as const : "page" as const;
+  const label = (date: Date) => date.toISOString().slice(0, 10);
+  let rows: ReportDay[];
+  if (basis === "property") {
+    rows = coverage.flatMap(day => day.propertyChecked && day.propertyClicks !== null &&
+      day.propertyImpressions !== null && day.propertyPosition !== null ? [{ date: label(day.date),
+      clicks: day.propertyClicks, impressions: day.propertyImpressions, position: day.propertyPosition }] : []);
+  } else {
+    const dates = coverage.filter(day => day.pagesComplete).map(day => day.date);
+    const pages = dates.length ? await tx.page.findMany({ where: { siteId, date: { in: dates } },
+      select: { date: true, clicks: true, impressions: true, position: true }, orderBy: { date: "asc" } }) : [];
+    const totals = new Map<string, { clicks: number; impressions: number; weighted: number }>();
+    for (const page of pages) {
+      const date = label(page.date);
+      const day = totals.get(date) ?? { clicks: 0, impressions: 0, weighted: 0 };
+      day.clicks += page.clicks; day.impressions += page.impressions; day.weighted += page.position * page.impressions;
+      totals.set(date, day);
+    }
+    rows = Array.from(totals, ([date, day]) => ({ date, clicks: day.clicks, impressions: day.impressions,
+      position: day.impressions > 0 ? day.weighted / day.impressions : 0 }));
+  }
+  return { basis, rows, coverage };
+}
 
-  const current = aggregatePeriod(currentPages, currentKwCount);
-  const previous = aggregatePeriod(previousPages, previousKwCount);
-
-  return {
-    current,
-    previous,
-    coverage,
-    deltas: {
-      clicks: coverage.comparable ? calculatePercentChange(current.clicks, previous.clicks) : null,
-      impressions: coverage.comparable ? calculatePercentChange(current.impressions, previous.impressions) : null,
-      // Positive delta = improved (lower position is better)
-      avgPosition: coverage.comparable && current.impressions > 0 && previous.impressions > 0 ? previous.avgPosition - current.avgPosition : null,
-      avgCtr: coverage.comparable && current.impressions > 0 && previous.impressions > 0 ? calculatePercentChange(current.avgCtr, previous.avgCtr) : null,
-    },
-  };
+export async function getSitePeriodMetrics(siteId: string, days = 28) {
+  const windows = gscComparisonWindows(days);
+  return db.$transaction(async tx => {
+    const series = await loadSearchSeries(tx, siteId, { startDate: windows.previous.start, endDate: windows.current.end });
+    const currentRows = series.rows.filter(day => day.date >= windows.current.start);
+    const previousRows = series.rows.filter(day => day.date < windows.current.start);
+    const currentStart = new Date(windows.current.start);
+    const currentDates = series.coverage.filter(day => day.date >= currentStart);
+    const previousDates = series.coverage.filter(day => day.date < currentStart);
+    const keywordCount = async (dates: typeof currentDates) => {
+      const known = dates.filter(day => day.queryPagesComplete).map(day => day.date);
+      return known.length ? (await tx.keyword.groupBy({ by: ["query"], where: { siteId, date: { in: known } } })).length : 0;
+    };
+    const current = aggregatePeriod(currentRows, await keywordCount(currentDates));
+    const previous = aggregatePeriod(previousRows, await keywordCount(previousDates));
+    const comparable = currentRows.length === days && previousRows.length === days;
+    const coverage = { ...windows, expectedDays: days,
+      currentDays: currentDates.filter(d => d.pagesComplete).length, previousDays: previousDates.filter(d => d.pagesComplete).length,
+      currentReportedDays: currentRows.length, previousReportedDays: previousRows.length,
+      currentComplete: currentRows.length === days, previousComplete: previousRows.length === days, comparable,
+      queryPagesComplete: currentDates.filter(d => d.queryPagesComplete).length === days,
+      lastSyncedAt: series.coverage.length ? new Date(Math.max(...series.coverage.map(row => row.syncedAt.getTime()))).toISOString() : null };
+    return { current, previous, basis: series.basis, coverage, deltas: {
+      clicks: comparable ? calculatePercentChange(current.clicks, previous.clicks) : null,
+      impressions: comparable ? calculatePercentChange(current.impressions, previous.impressions) : null,
+      avgPosition: comparable && current.impressions > 0 && previous.impressions > 0 ? previous.avgPosition - current.avgPosition : null,
+      avgCtr: comparable && current.impressions > 0 && previous.impressions > 0 ? calculatePercentChange(current.avgCtr, previous.avgCtr) : null,
+    } };
+  }, { isolationLevel: "RepeatableRead" });
 }
 
 /**
- * Aggregate keyword rows across the period (sum metrics, weighted position).
- * `queries` keeps only those queries.
+ * Scope each raw row through the successful sync for that day and the site's
+ * current property in one snapshot. Older rows without provenance stay stored
+ * until a sync verifies their date. Only the requested groups leave Postgres.
  */
-export async function getTopKeywords(
-  siteId: string,
-  period: Period = 28,
-  limit = 50,
-  queries?: string[]
-): Promise<KeywordRow[]> {
-  const range = parseRange(period);
-  const rows = await db.keyword.findMany({
-    where: {
-      siteId,
-      date: { gte: range.start, lte: range.end },
-      ...(queries && { query: { in: queries } }),
-    },
-    select: {
-      query: true,
-      clicks: true,
-      impressions: true,
-      position: true,
-    },
-  });
-
-  const byQuery = new Map<
-    string,
-    { clicks: number; impressions: number; weightedPos: number }
-  >();
-
-  for (const row of rows) {
-    const existing = byQuery.get(row.query) ?? {
-      clicks: 0,
-      impressions: 0,
-      weightedPos: 0,
-    };
-    existing.clicks += row.clicks;
-    existing.impressions += row.impressions;
-    existing.weightedPos += row.position * Math.max(row.impressions, 1);
-    byQuery.set(row.query, existing);
-  }
-
-  return Array.from(byQuery.entries())
-    .map(([query, data]) => {
-      const weight = Math.max(data.impressions, 1);
-      const position = data.weightedPos / weight;
-      const ctr = data.impressions > 0 ? data.clicks / data.impressions : 0;
-      return {
-        query,
-        clicks: data.clicks,
-        impressions: data.impressions,
-        position,
-        ctr,
-      };
-    })
-    .sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions)
-    .slice(0, limit);
+function groupedGscDetails(siteId: string, period: Period, dimension: "query" | "url", queries?: string[]) {
+  const { start, end } = parseRange(period);
+  const keywords = dimension === "query";
+  const table = keywords ? Prisma.sql`"Keyword"` : Prisma.sql`"Page"`;
+  const key = keywords ? Prisma.sql`d."query"` : Prisma.sql`d."url"`;
+  const complete = keywords ? Prisma.sql`c."queryPagesComplete"` : Prisma.sql`c."pagesComplete"`;
+  const filter = queries?.length ? Prisma.sql`AND d."query" IN (${Prisma.join(queries)})` : Prisma.empty;
+  return Prisma.sql`
+    SELECT ${key} AS label, SUM(d.clicks)::float8 AS clicks, SUM(d.impressions)::float8 AS impressions,
+      COALESCE(SUM(d.position * d.impressions) / NULLIF(SUM(d.impressions), 0), AVG(d.position)) AS position,
+      COALESCE(SUM(d.clicks)::float8 / NULLIF(SUM(d.impressions), 0), 0) AS ctr
+    FROM ${table} d
+    JOIN "GscSyncCoverage" c ON c."siteId" = d."siteId" AND c.date = d.date
+    JOIN "Site" s ON s.id = c."siteId" AND s."gscProperty" = c."gscProperty"
+    WHERE d."siteId" = ${siteId} AND d.date BETWEEN ${start} AND ${end} AND ${complete} ${filter}
+    GROUP BY ${key}`;
 }
 
-export async function getTopPages(
-  siteId: string,
-  period: Period = 28,
-  limit = 50
-): Promise<PageRow[]> {
-  const range = parseRange(period);
-  const rows = await db.page.findMany({
-    where: {
-      siteId,
-      date: { gte: range.start, lte: range.end },
-    },
-    select: {
-      url: true,
-      clicks: true,
-      impressions: true,
-      position: true,
-    },
-  });
-
-  const byUrl = new Map<
-    string,
-    { clicks: number; impressions: number; weightedPos: number }
-  >();
-
-  for (const row of rows) {
-    const existing = byUrl.get(row.url) ?? {
-      clicks: 0,
-      impressions: 0,
-      weightedPos: 0,
-    };
-    existing.clicks += row.clicks;
-    existing.impressions += row.impressions;
-    existing.weightedPos += row.position * Math.max(row.impressions, 1);
-    byUrl.set(row.url, existing);
-  }
-
-  return Array.from(byUrl.entries())
-    .map(([url, data]) => {
-      const weight = Math.max(data.impressions, 1);
-      const position = data.weightedPos / weight;
-      const ctr = data.impressions > 0 ? data.clicks / data.impressions : 0;
-      return {
-        url,
-        clicks: data.clicks,
-        impressions: data.impressions,
-        position,
-        ctr,
-      };
-    })
-    .sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions)
-    .slice(0, limit);
+type RankedDetail = Omit<KeywordRow, "query"> & { label: string };
+function rankedGscDetails(siteId: string, period: Period, limit: number, dimension: "query" | "url", queries?: string[]) {
+  return db.$queryRaw<RankedDetail[]>`${groupedGscDetails(siteId, period, dimension, queries)}
+    ORDER BY clicks DESC, impressions DESC, label ASC LIMIT ${limit}`;
 }
 
-export async function getDailyTraffic(
-  siteId: string,
-  period: Period = 90
-): Promise<DailyTraffic[]> {
-  const range = parseRange(period);
+// The same expected-CTR curve ranks low-CTR candidates and estimates their potential in the UI.
+const ctrCurve = [[1, 0.28], [2, 0.15], [3, 0.11], [5, 0.07], [10, 0.03], [20, 0.01]] as const;
+const longTailCtr = 0.005;
+export function expectedCtr(position: number): number {
+  return ctrCurve.find(([lastPosition]) => position <= lastPosition)?.[1] ?? longTailCtr;
+}
 
-  // Prefer page-level rows when present (cleaner site totals);
-  // fall back to keyword rows.
-  const pages = await db.page.findMany({
-    where: {
-      siteId,
-      date: { gte: range.start, lte: range.end },
-    },
-    select: { date: true, clicks: true, impressions: true },
-    orderBy: { date: "asc" },
-  });
+// Materialize the period once, then take each list by its own score. A query
+// with no clicks can lead either opportunity list even on a large site.
+export async function getOverviewKeywordCandidates(siteId: string, limit: number): Promise<KeywordRow[]> {
+  const curve = Prisma.join(ctrCurve.map(([last, rate]) => Prisma.sql`WHEN position <= ${last} THEN ${rate}::float8`), " ");
+  const rows = await db.$queryRaw<RankedDetail[]>`
+    WITH ranked AS MATERIALIZED (${groupedGscDetails(siteId, 28, "query")}),
+    gaps AS (SELECT *, CASE ${curve} ELSE ${longTailCtr}::float8 END - ctr AS gap FROM ranked),
+    candidates AS (
+      (SELECT label FROM ranked ORDER BY clicks DESC, impressions DESC, label LIMIT 10)
+      UNION
+      (SELECT label FROM ranked WHERE position BETWEEN 4 AND 20 AND impressions >= 20
+       ORDER BY impressions DESC, clicks DESC, label LIMIT ${limit})
+      UNION
+      (SELECT label FROM gaps WHERE impressions >= 50 AND position <= 15 AND gap > 0.02
+       ORDER BY impressions * gap DESC, clicks DESC, impressions DESC, label LIMIT ${limit})
+    )
+    SELECT ranked.* FROM ranked JOIN candidates USING (label) ORDER BY clicks DESC, impressions DESC, label`;
+  return rows.map(({ label, ...metrics }) => ({ query: label, ...metrics }));
+}
 
-  const source =
-    pages.length > 0
-      ? pages
-      : await db.keyword.findMany({
-          where: {
-            siteId,
-            date: { gte: range.start, lte: range.end },
-          },
-          select: { date: true, clicks: true, impressions: true },
-          orderBy: { date: "asc" },
-        });
+export async function getTopKeywords(siteId: string, period: Period = 28, limit = 50, queries?: string[]): Promise<KeywordRow[]> {
+  if (queries?.length === 0) return [];
+  const rows = await rankedGscDetails(siteId, period, limit, "query", queries);
+  return rows.map(({ label, ...metrics }) => ({ query: label, ...metrics }));
+}
 
-  const aggregated = new Map<string, { clicks: number; impressions: number }>();
+export async function getTopPages(siteId: string, period: Period = 28, limit = 50): Promise<PageRow[]> {
+  const rows = await rankedGscDetails(siteId, period, limit, "url");
+  return rows.map(({ label, ...metrics }) => ({ url: label, ...metrics }));
+}
 
-  for (const row of source) {
-    const dateStr = row.date.toISOString().slice(0, 10);
-    const current = aggregated.get(dateStr) ?? { clicks: 0, impressions: 0 };
-    current.clicks += row.clicks;
-    current.impressions += row.impressions;
-    aggregated.set(dateStr, current);
-  }
+export async function getDailyTrafficSeries(siteId: string, period: Period = 90) {
+  return db.$transaction(async tx => {
+    const { basis, rows } = await loadSearchSeries(tx, siteId, period);
+    return { basis, days: rows.map(({ date, clicks, impressions }) => ({ date, clicks, impressions })) };
+  }, { isolationLevel: "RepeatableRead" });
+}
 
-  // A successfully retrieved empty page-day is a reported zero. Unfetched days remain absent.
-  const [coverage, site] = await Promise.all([
-    db.gscSyncCoverage.findMany({ where: { siteId, date: { gte: range.start, lte: range.end }, pagesComplete: true }, select: { date: true, gscProperty: true } }),
-    db.site.findUnique({ where: { id: siteId }, select: { gscProperty: true } }),
-  ]);
-  for (const day of coverage) {
-    if (day.gscProperty !== site?.gscProperty) continue;
-    const date = day.date.toISOString().slice(0, 10);
-    if (!aggregated.has(date)) aggregated.set(date, { clicks: 0, impressions: 0 });
-  }
-
-  return Array.from(aggregated.entries())
-    .map(([date, metrics]) => ({ date, ...metrics }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+export async function getDailyTraffic(siteId: string, period: Period = 90): Promise<DailyTraffic[]> {
+  return (await getDailyTrafficSeries(siteId, period)).days;
 }
 
 export function formatPosition(position: number): string {

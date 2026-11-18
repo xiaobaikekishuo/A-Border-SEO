@@ -1,0 +1,31 @@
+[Unit]
+Description=A-Border SEO management service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aborder-control
+Group=aborder-control
+WorkingDirectory=/opt/aborder-control/current
+EnvironmentFile=/etc/aborder-control/control.env
+ExecStart=/usr/bin/node /opt/aborder-control/current/control-plane/server.mjs
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/aborder-control
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=384M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

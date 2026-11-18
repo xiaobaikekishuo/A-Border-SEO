@@ -62,7 +62,7 @@ scripts/            构建与维护脚本
 
 ## 外部连接
 
-应用可以访问的外部主机都登记在 `outbound-hosts.json`：`requests` 是应用会请求的主机，必须出现在 README 的“数据与外部连接”一节；`notRequested` 只能作为链接或字符串出现在列出的文件里。`lib/outbound-hosts.test.ts` 会扫描 `lib/`、`app/`、`packages/`、`components/` 和根目录代码，发现未登记的主机就失败。新增外部请求时，同时更新这三处。
+应用可访问的外部主机登记在 `outbound-hosts.json`。`requests` 是会请求的主机，必须出现在 README 的“数据与外部连接”一节。`notRequested` 中的主机仅可作为链接或字符串出现在列出的文件中。`lib/outbound-hosts.test.ts` 检查应用代码与同仓库桌面端代码。新增外部请求时，同时更新清单和 README。
 
 ## 架构要点
 
@@ -122,16 +122,15 @@ node packages/mcp/build.mjs        # 生成 packages/mcp/dist/cli.js
 ## Docker 镜像
 
 ```bash
-docker build -t a-border-seo:1.1.2 .
+version=$(node -p 'require("./package.json").version')
+docker build -t "a-border-seo:$version" .
 ```
 
 镜像包含网页应用（默认命令 `node server.js`）、worker（`node worker.cjs`）、抓取复查脚本（`node review-crawl.cjs`）和 Prisma CLI（`node node_modules/prisma/build/index.js migrate deploy`）。构建的大部分步骤在无网络环境下执行，字体等资源都随代码提供。
 
 ## 发布
 
-1. 更新 `package.json` 和 `packages/mcp/package.json` 的版本号（`lib/version.ts` 在构建时读取它），并写好 `CHANGELOG.md`。
-2. 本地执行 `npm ci && npx prisma generate && npx tsc --noEmit && npm test`。
-3. 打上 `v<版本>` 标签。`.github/workflows/docker-publish.yml` 会在 amd64 和 arm64 上构建、启动测试，然后发布到 GHCR。
+从仓库根目录用 `node scripts/version.mjs` 同步应用、桌面端、MCP 与锁文件的版本。Windows 安装包、GHCR 镜像与 GitHub Release 的完整流程见[发行指南](../docs/RELEASE.md)。
 
 ## 常见问题
 

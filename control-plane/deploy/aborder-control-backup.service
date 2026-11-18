@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up A-Border SEO management database and signing key
+After=aborder-control.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/aborder-control/current/control-plane/deploy/backup.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true

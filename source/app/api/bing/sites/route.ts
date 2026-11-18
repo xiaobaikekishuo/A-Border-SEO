@@ -13,18 +13,18 @@ export async function GET() {
   } catch (error) {
     if (error instanceof BingKeyMissingError) {
       return Response.json(
-        { error: error.message, code: "BING_KEY_MISSING" },
+        { error: "Connect Bing Webmaster Tools before choosing a site", code: "BING_KEY_MISSING" },
         { status: 400 }
       );
     }
-
-    console.error("Error listing Bing sites:", error);
-
+    // Provider errors may include request URLs, credentials or response text.
+    // The picker only needs a stable public message, never those raw details.
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Failed to list Bing sites",
+        error: "Unable to verify Bing sites. Check the Bing connection and try again.",
+        code: "BING_PROPERTY_CHECK_FAILED",
       },
-      { status: 500 }
+      { status: 502 }
     );
   }
 }

@@ -1,12 +1,14 @@
 import { auth } from "@/lib/auth";
+import { Prisma } from "@prisma/client";
 import { db } from "@/lib/db";
 import { assertPublicDomain } from "@/lib/crawler/engine";
 import { dispatchJob } from "@/lib/jobs/dispatch";
 import { GSC_SYNC_JOB } from "@/lib/jobs/handlers";
 import { requestSiteJob } from "@/lib/jobs/site-jobs";
 import { ensureDefaultAlerts } from "@/lib/alerts/evaluate";
-import { siteDomainFromProperty } from "@/lib/site-domain";
+import { isPublicDomainName, siteDomainFromProperty } from "@/lib/site-domain";
 import { canAddSite, siteCreated } from "@/lib/site-policy";
+import { listGSCProperties, ReauthRequiredError } from "@/lib/google";
 
 // On a serverless host the first GSC sync runs after the response, within this
 // limit (SERVERLESS_MAX_DURATION_S in lib/jobs/config.ts; Next needs a literal here).
@@ -59,18 +61,27 @@ export async function POST(req: Request) {
       return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Any client-sent `domain` is ignored: it is derived from the property
-    // here so a bad client can never store "//host/" again.
-    const { gscProperty } = (await req.json()) as { gscProperty?: string };
-
-    if (typeof gscProperty !== "string" || !gscProperty.trim()) {
-      return Response.json({ error: "Missing gscProperty" }, { status: 400 });
+    const body: unknown = await req.json().catch(() => null);
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return Response.json({ error: "Invalid site request" }, { status: 400 });
+    }
+    const input = body as { domain?: unknown; gscProperty?: unknown };
+    const hasProperty = input.gscProperty !== undefined && input.gscProperty !== null;
+    if (hasProperty && (typeof input.gscProperty !== "string" || !input.gscProperty.trim() || input.gscProperty.length > 2048)) {
+      return Response.json({ error: "Invalid gscProperty" }, { status: 400 });
+    }
+    const gscProperty = hasProperty ? (input.gscProperty as string).trim() : null;
+    if (!gscProperty && (typeof input.domain !== "string" || !input.domain.trim() || input.domain.length > 2048)) {
+      return Response.json({ error: "Enter a website domain or URL" }, { status: 400 });
     }
 
-    const domain = siteDomainFromProperty(gscProperty);
-    if (!domain) {
+    // A connected property is authoritative. Manual sites keep no GSC
+    // property, so they can use crawls and the workbench without Google.
+    const domain = siteDomainFromProperty(gscProperty ?? input.domain as string);
+
+    if (!domain || !isPublicDomainName(domain)) {
       return Response.json(
-        { error: "Could not derive a domain from gscProperty" },
+        { error: "Enter a valid public website domain or URL" },
         { status: 400 }
       );
     }
@@ -107,6 +118,20 @@ export async function POST(req: Request) {
       return Response.json({ error: permission.reason }, { status: permission.status });
     }
 
+    if (gscProperty) {
+      try {
+        const properties = await listGSCProperties(session.user.id);
+        if (!properties.some(property => property.siteUrl === gscProperty && property.permissionLevel !== "siteUnverifiedUser")) {
+          return Response.json({ error: "This Google account cannot access that Search Console property", code: "GSC_PROPERTY_UNAVAILABLE" }, { status: 403 });
+        }
+      } catch (error) {
+        if (error instanceof ReauthRequiredError) {
+          return Response.json({ error: "Connect Google before choosing a Search Console property", code: "REAUTH_REQUIRED" }, { status: 401 });
+        }
+        return Response.json({ error: "Could not verify Search Console access. Please try again.", code: "GSC_PROPERTIES_UNAVAILABLE" }, { status: 502 });
+      }
+    }
+
     // Create the site
     const site = await db.site.create({
       data: {
@@ -138,6 +163,10 @@ export async function POST(req: Request) {
 
     return Response.json(site, { status: 201 });
   } catch (error) {
+    // The same account can submit twice before the initial duplicate read.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return Response.json({ error: "Site already exists" }, { status: 409 });
+    }
     console.error("Error creating site:", error);
 
     return Response.json(

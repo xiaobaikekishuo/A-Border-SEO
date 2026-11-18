@@ -31,11 +31,15 @@ export async function seedApiFixtures(db: PrismaClient): Promise<Fixtures> {
     ["site-b", "secret b query", "https://secret-b.com/private"],
   ]) {
     for (let i = 1; i <= 40; i++) {
+      await db.gscSyncCoverage.create({ data: { siteId, date: daysAgo(i),
+        gscProperty: "sc-domain:" + new URL(url).hostname, pagesComplete: true, queryPagesComplete: true } });
       await db.keyword.create({ data: { siteId, query, date: daysAgo(i), clicks: 10, impressions: 100, ctr: 0.1, position: 4 } });
       await db.page.create({ data: { siteId, url, date: daysAgo(i), clicks: 10, impressions: 100, ctr: 0.1, position: 4 } });
     }
   }
   // An older query, only inside a date range that goes back far enough.
+  await db.gscSyncCoverage.create({ data: { siteId: "site-a", date: daysAgo(100),
+    gscProperty: "sc-domain:quayline.app", queryPagesComplete: true } });
   await db.keyword.create({ data: { siteId: "site-a", query: "old query", date: daysAgo(100), clicks: 7, impressions: 70, ctr: 0.1, position: 12 } });
 
   // Bing: daily rows, and weekly query and page rows. One day and one query

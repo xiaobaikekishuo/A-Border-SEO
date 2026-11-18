@@ -7,6 +7,7 @@ import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { Loader2, LogOut, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { desktopBridge } from "@/lib/desktop/client";
 import {
   Dialog,
   DialogClose,
@@ -47,10 +48,13 @@ function SubmitButton({
   );
 }
 
-export function SignOutButton() {
+export function SignOutButton({ managed = false }: { managed?: boolean }) {
   const ui = useUiText();
   return (
-    <form action={signOutAction}>
+    <form action={signOutAction} onSubmit={event => {
+      const logout = managed ? desktopBridge()?.logout : undefined;
+      if (logout) { event.preventDefault(); void logout(); }
+    }}>
       <SubmitButton variant="outline" pendingLabel="Signing out">
         <LogOut className="size-4" aria-hidden />
         {ui("Sign out")}</SubmitButton>

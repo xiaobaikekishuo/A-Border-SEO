@@ -30,6 +30,7 @@ export type Pillar = {
 export type PlanTopic = Pick<Cluster, "title" | "keyword" | "funnel" | "intent" | "contentType"> & { brief: Brief };
 export type Plan = { pillarSummary: string; topics: PlanTopic[] };
 export type PlanJob = {
+  keywordSelection?: import("@/lib/content-planner/keyword-selection").KeywordSelection;
   topicCount?: number; funnelCounts?: FunnelCounts;
   kind?: string; reviewResult?: ArticleReview | null; reviewPages?: { pageId: string; title: string; url: string; source: string }[];
   id: string; pillarId: string; status: string; result: Plan | null; error: string | null;

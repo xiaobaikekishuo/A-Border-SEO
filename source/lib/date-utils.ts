@@ -32,8 +32,8 @@ export function dateWindow(days: number, end: string): { start: string; end: str
 }
 
 /** Conservative cutoff in the reporting timezone used by GSC (America/Los_Angeles). */
-export function getGscDateRange(days: number) {
-  return dateWindow(days, getDataLagDate());
+export function getGscDateRange(days: number, now = new Date()) {
+  return dateWindow(days, getDataLagDate(now));
 }
 
 /**
@@ -51,8 +51,8 @@ export function calculatePercentChange(
  * Returns the approximate latest date (YYYY-MM-DD) for which GSC data
  * is available. Google typically has a ~3-day lag.
  */
-export function getDataLagDate(): string {
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date());
+export function getDataLagDate(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
   const value = (type: string) => parts.find(part => part.type === type)!.value;
   const day = new Date(`${value("year")}-${value("month")}-${value("day")}T00:00:00Z`);
   day.setUTCDate(day.getUTCDate() - 3);

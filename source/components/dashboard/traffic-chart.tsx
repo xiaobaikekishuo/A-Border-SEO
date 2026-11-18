@@ -19,14 +19,13 @@ interface ChartData {
 type Day = { date: string; clicks: number | null; impressions: number | null };
 
 
-/** Every calendar day from the first synced day to today; days GSC has not reported stay null. */
-function fillDays(data: ChartData[]): Day[] {
-  if (data.length === 0) return [];
+/** Use the requested GSC date window; a missing row is never a reported zero. */
+function fillDays(data: ChartData[], start: string, end: string): Day[] {
+  if (!start || !end) return [];
   const byDate = new Map(data.map((d) => [d.date, d]));
   const out: Day[] = [];
-  const end = new Date().toISOString().slice(0, 10);
   for (
-    let t = Date.parse(`${data[0].date}T00:00:00Z`);
+    let t = Date.parse(`${start}T00:00:00Z`);
     new Date(t).toISOString().slice(0, 10) <= end;
     t += 86_400_000
   ) {
@@ -44,6 +43,7 @@ function fillDays(data: ChartData[]): Day[] {
 export function TrafficChart({ siteId, days = 90 }: TrafficChartProps) {
   const { t, locale } = useI18n();
   const [data, setData] = useState<ChartData[]>([]);
+  const [period, setPeriod] = useState({ start: "", end: "", basis: "" });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hover, setHover] = useState<number | null>(null);
@@ -58,7 +58,11 @@ export function TrafficChart({ siteId, days = 90 }: TrafficChartProps) {
         const res = await fetch(`/api/sites/${siteId}/traffic?days=${days}`);
         if (!res.ok) throw new Error(t("Failed to load traffic", "流量数据加载失败"));
         const json = (await res.json()) as ChartData[];
-        if (!cancelled) setData(json);
+        if (!cancelled) {
+          setData(json);
+          setPeriod({ start: res.headers.get("X-GSC-Start") ?? "", end: res.headers.get("X-GSC-End") ?? "",
+            basis: res.headers.get("X-GSC-Basis") ?? "" });
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err instanceof Error ? err.message : t("Failed to load chart", "图表加载失败"));
@@ -74,8 +78,8 @@ export function TrafficChart({ siteId, days = 90 }: TrafficChartProps) {
     };
   }, [siteId, days, t]);
 
-  const series = useMemo(() => fillDays(data), [data]);
-  const max = Math.max(1, ...series.map((d) => d.clicks ?? 0));
+  const series = useMemo(() => fillDays(data, period.start, period.end), [data, period]);
+  const max = Math.max(0, ...series.map((d) => d.clicks ?? 0));
   const missing = series.filter((d) => d.clicks === null).length;
 
   if (loading) {
@@ -94,7 +98,7 @@ export function TrafficChart({ siteId, days = 90 }: TrafficChartProps) {
     );
   }
 
-  if (series.length === 0) {
+  if (series.length === 0 || data.length === 0) {
     return (
       <div className="panel flex h-[262px] flex-col items-center justify-center gap-2">
         <p className="text-atom-subheader font-medium text-text-strong">{t("No traffic yet", "暂无流量数据")}</p>
@@ -111,7 +115,9 @@ export function TrafficChart({ siteId, days = 90 }: TrafficChartProps) {
   return (
     <section className="panel flex flex-col gap-4 px-[22px] py-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-[15px] leading-5 font-semibold">{t("Clicks per day", "每日点击量")}</h2>
+        <div><h2 className="text-[15px] leading-5 font-semibold">{t("Clicks per day", "每日点击量")}</h2>
+          <p className="text-xs text-muted-foreground">{period.start} ~ {period.end} · {period.basis === "property" ? t("GSC property totals (Web, final)", "GSC 资源汇总（网页搜索，最终数据）") : t("GSC page-detail totals", "GSC 页面明细合计")}</p>
+        </div>
         <div className="flex flex-wrap gap-[18px] text-[12px] leading-4 text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <span aria-hidden className="size-2.5 rounded-[2px] bg-chart-1" />
@@ -140,7 +146,7 @@ export function TrafficChart({ siteId, days = 90 }: TrafficChartProps) {
               <div
                 className="w-full max-w-2.5 rounded-t-[2px] bg-chart-1 transition-opacity"
                 style={{
-                  height: `${Math.max(1, Math.round((d.clicks / max) * 160))}px`,
+                  height: `${Math.max(1, Math.round((d.clicks / Math.max(1, max)) * 160))}px`,
                   opacity: hover === null || hover === i ? 1 : 0.55,
                 }}
               />

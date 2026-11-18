@@ -186,6 +186,46 @@ describe("imported AI reports and the platform overview", () => {
     queries: [], countries: [], devices: [], tables: ["DAILY", "PAGES"], skipped: 0, truncated: 0, ignored: [], expectedUpdatedAt: null,
   };
 
+  it("counts distinct exposed URLs only on verified days for the current property and SEO period", async () => {
+    const db = testDb.db, siteId = "geo-period-test", gscProperty = "sc-domain:current.test";
+    // Still November 16 in California; the 28-day period ends on November 13.
+    const now = new Date("2026-11-17T01:00:00Z");
+    const day = (label: string) => new Date(label + "T00:00:00Z");
+    await db.site.create({ data: { id: siteId, userId: "owner", domain: "current.test", gscProperty, bingSite: "https://current.test/" } });
+    const read = () => readPlatformOverview(db, "owner", siteId, now);
+    const extract = (overview: Awaited<ReturnType<typeof read>>, id = "GOOGLE_AIO") => overview.platforms.find(row => row.id === id)!.index;
+    expect(extract(await read())).toMatchObject({ pages: null, state: "UNKNOWN", coverage: { days: 0, start: "2026-10-17", end: "2026-11-13" } });
+    const coverage = (label: string, property = gscProperty, complete = true) => ({ siteId, date: day(label), gscProperty: property, pagesComplete: complete });
+    await db.gscSyncCoverage.createMany({ data: [coverage("2026-10-16"), coverage("2026-10-17"), coverage("2026-11-13"),
+      coverage("2026-11-01", "sc-domain:old.test"), coverage("2026-11-02", gscProperty, false), coverage("2026-11-14")] });
+    const page = (label: string, name: string, impressions = 1) => ({ siteId, date: day(label), url: "https://current.test/" + name, impressions });
+    await db.page.createMany({ data: [page("2026-10-16", "early"), page("2026-11-14", "recent"), page("2026-11-01", "old-property"), page("2026-11-02", "incomplete"),
+      page("2026-10-18", "unverified"), page("2026-10-17", "no-impressions", 0)] });
+    expect(extract(await read())).toMatchObject({ pages: null, coverage: { days: 2 } });
+    await db.page.createMany({ data: [page("2026-10-17", "repeated"), page("2026-11-13", "repeated"), page("2026-11-13", "second")] });
+    await db.bingDaily.createMany({ data: [{ siteId, date: day("2026-09-01"), inIndex: 138 }, { siteId, date: day("2026-11-13"), inIndex: null }] });
+    const result = await read();
+    for (const id of ["GOOGLE_AIO", "GOOGLE_AI_MODE", "GEMINI"])
+      expect(extract(result, id)).toMatchObject({ pages: 2, state: "WARN", coverage: { days: 2, expected: 28 } });
+    for (const id of ["CHATGPT", "COPILOT"])
+      expect(extract(result, id)).toMatchObject({ pages: 138, at: "2026-09-01", state: "WARN", stale: true });
+    await db.site.update({ where: { id: siteId }, data: { bingSite: null } });
+    expect(extract(await read(), "CHATGPT")).toMatchObject({ pages: null, at: null, connected: false });
+    await db.gscSyncCoverage.deleteMany({ where: { siteId } });
+    await db.page.deleteMany({ where: { siteId } });
+    await db.gscSyncCoverage.createMany({ data: Array.from({ length: 28 }, (_, i) => ({ siteId, gscProperty, pagesComplete: true,
+      date: new Date(day("2026-10-17").getTime() + i * 86_400_000) })) });
+    expect(extract(await read())).toMatchObject({ pages: 0, coverage: { days: 28 } });
+    // Legacy coverage still describes returned page rows. An explicitly checked
+    // but absent property-day, on the other hand, must not look like a real zero.
+    await db.$executeRaw`UPDATE "GscSyncCoverage" SET "propertyChecked" = true
+      WHERE "siteId" = ${siteId} AND "date" = '2026-11-13'::date`;
+    expect(extract(await read())).toMatchObject({ pages: null, coverage: { days: 27 } });
+    await db.$executeRaw`UPDATE "GscSyncCoverage" SET "propertyImpressions" = 0
+      WHERE "siteId" = ${siteId} AND "date" = '2026-11-13'::date`;
+    expect(extract(await read())).toMatchObject({ pages: 0, coverage: { days: 28 } });
+  });
+
   it("checks a report against the site and keeps one per kind", async () => {
     const db = testDb.db;
     await expect(saveAiReport(db, "owner", SITE, { ...report, pages: [{ url: "https://other.test/", value: 1 }] })).rejects.toMatchObject({ status: 422 });

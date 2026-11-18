@@ -21,7 +21,7 @@ type DomainData = {
   domain: string;
   overview: {
     organicKeywords: number;
-    organicTraffic: number;
+    organicTraffic: number | null;
     organicCost: number | null;
     backlinks: number | null;
     referringDomains: number | null;
@@ -212,7 +212,7 @@ export function DomainCard({ data, label }: { data: DomainData; label: string })
           />
           <MetricCard
             label={data.source === "gsc" ? (ui.locale === "zh" ? "GSC 点击量" : "GSC clicks") : ui("Organic traffic")}
-            value={data.overview.organicTraffic.toLocaleString()}
+            value={data.overview.organicTraffic?.toLocaleString() ?? (ui.locale === "zh" ? "未报告" : "Not reported")}
           />
           {data.overview.organicCost != null && (
             <MetricCard

@@ -10,6 +10,7 @@ export const SITE_SUB_PAGES = [
   "keywords",
   "saved-keywords",
   "pages",
+  "bing",
   "crawl",
   "vitals",
   "ai-access",

@@ -4,7 +4,7 @@ import { useUiText, identityUiText, type UiTranslator } from "@/components/ui/ui
 import { useI18n } from "@/lib/i18n/client";
 
 
-import Link from "next/link";
+import Link, { useLinkStatus } from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 import {
@@ -24,6 +24,7 @@ import {
   Layers3,
   ScanSearch,
   Activity,
+  LoaderCircle,
   type LucideIcon,
 } from "lucide-react";
 
@@ -61,6 +62,7 @@ export function SidebarNav({
           { href: `/sites/${activeSiteId}/keywords`, label: ui("Keywords"), icon: Search },
           { href: `/sites/${activeSiteId}/saved-keywords`, label: ui("Saved keywords"), icon: Bookmark },
           { href: `/sites/${activeSiteId}/pages`, label: ui("Pages"), icon: FileText },
+          { href: `/sites/${activeSiteId}/bing`, label: t("Bing reports", "Bing 报表"), icon: Activity },
           { href: `/sites/${activeSiteId}/crawl`, label: ui("Crawl / Audit"), icon: Bug },
           { href: `/sites/${activeSiteId}/vitals`, label: ui("Vitals"), icon: Gauge },
           { href: `/sites/${activeSiteId}/ai-access`, label: t("AI crawler access", "AI 爬虫访问"), icon: ScanSearch },
@@ -139,8 +141,6 @@ function SidebarLink({
     ? pathname === item.href
     : pathname === item.href || pathname.startsWith(`${item.href}/`);
 
-  const Icon = item.icon;
-
   // The same violet selection treatment works in the expanded and compact sidebar.
   if (collapsed) {
     return (
@@ -156,7 +156,7 @@ function SidebarLink({
             : "text-muted-foreground hover:border-border hover:bg-bg-section hover:text-text-strong"
         )}
       >
-        <Icon className="size-4" aria-hidden />
+        <SidebarLinkContent item={item} active={active} collapsed />
       </Link>
     );
   }
@@ -172,8 +172,35 @@ function SidebarLink({
           : "text-muted-foreground hover:border-border hover:bg-bg-section hover:text-text-strong"
       )}
     >
-      <Icon className={cn("size-4 shrink-0 transition-colors", active ? "text-primary" : "text-text-soft group-hover:text-text")} aria-hidden />
-      <span className="truncate">{ui(item.label)}</span>
+      <SidebarLinkContent item={item} active={active} collapsed={false} />
     </Link>
+  );
+}
+
+// The status hook belongs inside Link's context. It follows the actual router
+// transition, including interrupted navigation, instead of a click-only timer.
+function SidebarLinkContent({ item, active, collapsed }: { item: NavItem; active: boolean; collapsed: boolean }) {
+  const { pending } = useLinkStatus();
+  const ui = useUiText();
+  const { t } = useI18n();
+  const Icon = pending ? LoaderCircle : item.icon;
+  const label = ui(item.label);
+
+  return (
+    <>
+      <span
+        aria-busy={pending || undefined}
+        className={cn("flex min-w-0 flex-1 items-center gap-2.5", collapsed && "justify-center", pending && "text-primary")}
+      >
+        <Icon
+          className={cn("size-4 shrink-0 transition-colors", pending && "motion-safe:animate-spin", active || pending ? "text-primary" : "text-text-soft group-hover:text-text")}
+          aria-hidden
+        />
+        {!collapsed && <span className="truncate">{label}</span>}
+      </span>
+      <span role="status" aria-live="polite" className="sr-only">
+        {pending ? t("Opening {page}…", "正在打开{page}…", { page: label }) : null}
+      </span>
+    </>
   );
 }

@@ -15,13 +15,13 @@ export const LIMITS = Object.freeze({
   answerBytes: 500_000,
   apiResponseBytes: 65_536,
 });
-export const HEARTBEAT_MS = 30_000;
+export const HEARTBEAT_MS = 10_000;
 export const POLL_MS = 5_000;
 export const API_TIMEOUT_MS = 12_000;
 
 // Error codes the server and the log may show. Anything else becomes generation_failed.
 export const FAIL_CODES = new Set([
-  "generation_timeout", "cli_output_limit", "worker_stopped", "worker_api_failed", "invalid_output_schema", "invalid_prompt",
+  "generation_timeout", "cli_output_limit", "worker_stopped", "worker_api_failed", "worker_lease_lost", "invalid_output_schema", "invalid_prompt",
   "chatgpt_usage_limit", "codex_generation_failed", "invalid_cli_event", "unexpected_tool_event", "invalid_model_output",
   "unsupported_provider", "codex_executable_missing", "codex_executable_unsupported", "chatgpt_login_required",
 ]);
@@ -96,7 +96,14 @@ export function parseConfig(env, argv, platform = process.platform) {
   if (!REASONING.has(reasoning)) throw new Error("invalid_config");
   const model = env.ABORDER_CODEX_MODEL?.trim() || null;
   if (model && !/^[A-Za-z0-9._:-]{1,100}$/.test(model)) throw new Error("invalid_config");
+  const hosted = env.ABORDER_HOSTED_WORKER === "1";
+  const installationId = env.ABORDER_INSTALLATION_ID, accountId = env.ABORDER_ACCOUNT_ID;
+  const productId = env.ABORDER_PRODUCT_ID, desktopVersion = env.ABORDER_DESKTOP_VERSION;
+  if (hosted && (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(installationId ?? "")
+    || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(accountId ?? "")
+    || productId !== "a-border-seo" || !/^\d+\.\d+\.\d+$/.test(desktopVersion ?? ""))) throw new Error("invalid_config");
   return {
+    hosted, installationId, accountId, productId, desktopVersion,
     mode: flags.has("--help") || flags.has("-h") ? "help" : flags.has("--generate-token") ? "generate-token" : flags.has("--login") ? "login" : flags.has("--check") ? "check" : flags.has("--once") ? "once" : "watch",
     baseUrl: parseBaseUrl(env.ABORDER_URL?.trim() || "http://localhost:3300", env.ABORDER_WORKER_ALLOW_REMOTE === "1"),
     runtime: resolve(runtime),
@@ -109,6 +116,12 @@ export function parseConfig(env, argv, platform = process.platform) {
     timeoutSeconds: intSetting(env.ABORDER_CODEX_TIMEOUT_SECONDS?.trim(), 540, 30, 540),
     platform,
   };
+}
+
+export function workerHeaders(config, token) {
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "application/json",
+    ...(config.hosted ? { "X-Aborder-Installation-Id": config.installationId, "X-Aborder-Account-Id": config.accountId,
+      "X-Aborder-Product-Id": config.productId, "X-Aborder-Desktop-Version": config.desktopVersion } : {}) };
 }
 
 /** The worker token from LOCAL_CONTENT_WORKER_TOKEN or the file named by ABORDER_WORKER_TOKEN_FILE. */

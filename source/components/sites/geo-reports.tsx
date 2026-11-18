@@ -5,7 +5,7 @@ import { FileUp, Trash2 } from "lucide-react";
 import { useI18n } from "@/lib/i18n/client";
 import type { Translator } from "@/lib/i18n/shared";
 import type { AiReports, StoredAiReport } from "@/lib/geo/report-store";
-import { decodeReportBytes, parseReportFiles, REPORT_LIMITS, type ReportKind } from "@/lib/geo/reports";
+import { decodeReportBytes, parseReportFiles, reportTotal, REPORT_LIMITS, type ReportKind } from "@/lib/geo/reports";
 import { zipCsvEntries } from "@/lib/geo/zip";
 import { geoErrorMessage } from "./geo-errors";
 import { announceGeoUpdate } from "./geo-events";
@@ -46,10 +46,6 @@ async function readFiles(list: FileList): Promise<{ name: string; text: string }
   return out;
 }
 
-function total(report: Pick<StoredAiReport, "daily" | "pages">): number {
-  return report.daily.length ? report.daily.reduce((sum, d) => sum + d.value, 0) : report.pages.reduce((sum, p) => sum + p.value, 0);
-}
-
 function ReportCard({ kind, siteId, domain, stored, onSaved }: { kind: ReportKind; siteId: string; domain: string; stored: StoredAiReport | null; onSaved: (reports: AiReports) => void }) {
   const { t } = useI18n();
   const [parsed, setParsed] = useState<Parsed | null>(null);
@@ -57,6 +53,10 @@ function ReportCard({ kind, siteId, domain, stored, onSaved }: { kind: ReportKin
   const [busy, setBusy] = useState(false);
   const gsc = kind === "GSC_AI";
   const metric = gsc ? t("impressions", "次展示") : t("citations", "次引用");
+  function metricLabel(report: Pick<StoredAiReport, "daily">) {
+    const value = reportTotal(report);
+    return value === null ? t("Total not provided", "未提供总计") : `${value.toLocaleString()} ${metric}`;
+  }
 
   async function choose(list: FileList | null) {
     setError("");
@@ -103,7 +103,7 @@ function ReportCard({ kind, siteId, domain, stored, onSaved }: { kind: ReportKin
         : t("How often Copilot and Bing's AI answers cite the site. In Bing Webmaster Tools open AI Performance and export each table (daily, pages, grounding queries) as CSV, then pick them together.", "Copilot 和 Bing AI 回答引用网站的次数。在 Bing 网站管理员工具打开“AI 表现”，把每张表（每日、网页、依据查询）分别导出为 CSV，再一起选择。")}</p>
     </div>
     {stored && <div className="space-y-2 text-sm">
-      <div><strong>{total(stored).toLocaleString()}</strong> {metric}{stored.start && stored.end ? ` · ${stored.start} – ${stored.end}` : ""}</div>
+      <div><strong>{metricLabel(stored)}</strong>{stored.start && stored.end ? ` · ${stored.start} – ${stored.end}` : ""}</div>
       <div className="text-xs text-muted-foreground">{t("Imported {at}", "导入于 {at}", { at: new Date(stored.updatedAt).toLocaleString() })}{stored.skipped ? " · " + t("{n} rows skipped", "跳过 {n} 行", { n: stored.skipped }) : ""}</div>
       {stored.pages.length > 0 && <div>
         <div className="text-xs font-medium">{t("Top pages", "热门页面")}</div>
@@ -124,7 +124,7 @@ function ReportCard({ kind, siteId, domain, stored, onSaved }: { kind: ReportKin
       </button>}
     </div>
     {parsed && <div className="space-y-2 rounded-md bg-muted/40 p-3 text-sm">
-      <div>{t("Found {tables}: {n} {metric}", "识别到 {tables}：共 {n} {metric}", { tables: parsed.tables.join(", "), n: total(parsed).toLocaleString(), metric })}{parsed.start && parsed.end ? ` · ${parsed.start} – ${parsed.end}` : ""}</div>
+      <div>{t("Found {tables}", "识别到 {tables}", { tables: parsed.tables.join(", ") })} · {metricLabel(parsed)}{parsed.start && parsed.end ? ` · ${parsed.start} – ${parsed.end}` : ""}</div>
       {(parsed.skipped > 0 || parsed.ignored.length > 0 || parsed.truncated > 0) && <div className="text-xs text-muted-foreground">
         {parsed.skipped > 0 && <div>{t("{n} rows skipped (empty, another site, or unreadable).", "跳过 {n} 行（空行、其他网站或无法识别）。", { n: parsed.skipped })}</div>}
         {parsed.truncated > 0 && <div>{t("{n} rows beyond the kept limit left out.", "超出保存上限的 {n} 行未保留。", { n: parsed.truncated })}</div>}

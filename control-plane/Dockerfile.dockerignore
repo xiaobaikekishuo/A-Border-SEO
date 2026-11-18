@@ -1,0 +1,14 @@
+**
+!control-plane/
+!control-plane/*.mjs
+!control-plane/package.json
+!control-plane/migrations/
+!control-plane/migrations/*.sql
+!control-plane/web/
+!control-plane/web/index.html
+!control-plane/web/admin.css
+!control-plane/web/admin.js
+!source/
+!source/lib/
+!source/lib/managed/
+!source/lib/managed/protocol.mjs

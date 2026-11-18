@@ -1,11 +1,15 @@
 import Link from "next/link";
+import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { getI18n } from "@/lib/i18n/server";
+import type { Translator } from "@/lib/i18n/shared";
 import { getReadiness } from "@/lib/geo/readiness";
+import { buildSiteOverview, overviewSiteFields } from "@/lib/geo/platform-overview";
 import type { GeoCheckKey } from "@/lib/geo/readiness-rules";
 import { PageHeader } from "@/components/ui/page-header";
+import { ReportAnalysisLink } from "@/components/ai-workbench/report-analysis-link";
 import GeoObservations from "@/components/sites/geo-observations";
 import GeoPlatforms from "@/components/sites/geo-platforms";
 import GeoReports from "@/components/sites/geo-reports";
@@ -15,11 +19,47 @@ export default async function GeoPage({params}:{params:Promise<{siteId:string}>}
   const {siteId} = await params;
   const userId = (await auth())?.user?.id;
   if (!userId) redirect("/login");
-  const site = await db.site.findFirst({where:{id:siteId,userId},select:{domain:true}});
+  const site = await db.site.findFirst({where:{id:siteId,userId},select:overviewSiteFields});
   if (!site) redirect("/sites");
-  const [{t}, readiness] = await Promise.all([getI18n(), getReadiness(db,siteId)]);
+  const {t} = await getI18n();
   const googleId = process.env.GOOGLE_CLIENT_ID?.trim() ?? "";
   const oauthClientId = /^\d+-[A-Za-z0-9_-]+\.apps\.googleusercontent\.com$/.test(googleId) ? googleId : undefined;
+  return <main className="space-y-5">
+    <PageHeader title={t("GEO monitoring","GEO 监测")} meta={site.domain}
+      description={t("See how each AI platform can reach, use, answer with and send visitors from the site.","查看各 AI 平台能否访问和使用网站、回答中是否提及或引用网站，以及带来的访问。")}
+      actions={<>
+        <Link className="text-sm text-link" href={`/sites/${siteId}/ai-access`}>{t("Check crawler rules","检查爬虫规则")} →</Link>
+        <ReportAnalysisLink siteId={siteId} scope="geo" t={t} />
+      </>} />
+    <Suspense key={`platforms-${siteId}`} fallback={<section className="panel p-5" aria-busy="true"><p role="status">{t("Loading AI platforms…", "正在加载各 AI 平台数据…")}</p></section>}>
+      <GeoPlatformsPanel site={site}/>
+    </Suspense>
+    <GeoTracking key={`tracking-${siteId}`} siteId={siteId} domain={site.domain}/>
+    <GeoReports key={`reports-${siteId}`} siteId={siteId} domain={site.domain}/>
+    <GeoObservations key={siteId} siteId={siteId} domain={site.domain} oauthClientId={oauthClientId}/>
+    <Suspense fallback={<section className="panel space-y-4 p-5" aria-busy="true">
+      <h2 className="font-semibold">{t("GEO technical readiness", "GEO 技术准备度")}</h2>
+      <p role="status" className="text-sm text-muted-foreground">{t("Loading readiness checks…", "正在加载准备度检查…")}</p>
+    </section>}>
+      <GeoReadinessPanel siteId={siteId} t={t}/>
+    </Suspense>
+  </main>;
+}
+
+async function GeoPlatformsPanel({ site }: { site: Parameters<typeof buildSiteOverview>[1] }) {
+  try {
+    const overview = await buildSiteOverview(db, site);
+    return <GeoPlatforms siteId={site.id} initialData={overview}/>;
+  } catch (error) {
+    console.error("GEO platform overview", error);
+    return <GeoPlatforms siteId={site.id} initialData={null}/>;
+  }
+}
+
+// Rendered only after the page has checked the session and site ownership.
+// The lower checklist must not hold up the independent reports above it.
+async function GeoReadinessPanel({ siteId, t }: { siteId: string; t: Translator }) {
+  const readiness = await getReadiness(db, siteId);
   const labels: Record<GeoCheckKey, { name: string; help: string }> = {
     SNIPPET: { name: t("Title and description", "标题与描述"), help: t("Both a title and a meta description are set.", "同时设置了标题和描述。") },
     HEADING: { name: t("Main heading", "H1 主标题"), help: t("The page has an H1.", "页面有 H1。") },
@@ -31,15 +71,7 @@ export default async function GeoPage({params}:{params:Promise<{siteId:string}>}
     AUTHORSHIP: { name: t("Author and date (articles)", "作者与日期（文章）"), help: t("Article markup names an author and a publication or update date.", "文章标记中写明了作者和发布或更新日期。") },
     LINKS: { name: t("Internal links", "站内链接"), help: t("The page links to other pages of the site.", "页面链接到站内其他页面。") },
   };
-  return <main className="space-y-5">
-    <PageHeader title={t("GEO monitoring","GEO 监测")} meta={site.domain}
-      description={t("See how each AI platform can reach, use, answer with and send visitors from the site.","查看各 AI 平台能否访问和使用网站、回答中是否提及或引用网站，以及带来的访问。")}
-      actions={<Link className="text-sm text-link" href={`/sites/${siteId}/ai-access`}>{t("Check crawler rules","检查爬虫规则")} →</Link>} />
-    <GeoPlatforms key={`platforms-${siteId}`} siteId={siteId}/>
-    <GeoTracking key={`tracking-${siteId}`} siteId={siteId} domain={site.domain}/>
-    <GeoReports key={`reports-${siteId}`} siteId={siteId} domain={site.domain}/>
-    <GeoObservations key={siteId} siteId={siteId} domain={site.domain} oauthClientId={oauthClientId}/>
-    <section className="panel space-y-4 p-5">
+  return <section className="panel space-y-4 p-5">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-semibold">{t("GEO technical readiness","GEO 技术准备度")} <span className="ml-1 rounded border border-border px-1.5 py-0.5 align-middle text-[11px] font-normal text-muted-foreground">v{readiness?.version ?? 2}</span></h2>
         <strong className="text-xl">{readiness?.score != null ? `${readiness.score}/100` : t("Awaiting evidence","待采集")}</strong>
@@ -49,6 +81,5 @@ export default async function GeoPage({params}:{params:Promise<{siteId:string}>}
       <p className="text-xs text-muted-foreground">{readiness.date} · {t("Sample / eligible pages","样本 / 符合条件的页面")} {readiness.sampled} / {readiness.total} · {readiness.sampling === "GSC_IMPRESSIONS" ? t("{n} pages chosen by GSC impressions", "其中 {n} 页按 GSC 曝光选取", { n: readiness.rankedPages }) : t("No GSC data: ordered by URL", "无 GSC 数据：按网址排序")}</p>
       {readiness.checks.some(check => (check.key === "AUTHORSHIP" || check.key === "SECTIONS") && !check.applicable) && <p className="text-xs text-muted-foreground">{t("Some checks need evidence saved by newer crawls. Run a new crawl to fill them in.", "部分检查需要新版抓取保存的依据，重新抓取一次即可补全。")}</p>}</> :
       <Link href={`/sites/${siteId}/crawl`} className="text-sm text-link">{t("Review crawl coverage","查看抓取记录")} →</Link>}
-    </section>
-  </main>;
+    </section>;
 }

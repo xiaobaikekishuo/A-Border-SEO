@@ -1,0 +1,160 @@
+name: Check
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  control-plane:
+    name: Test management service
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - run: npm --prefix control-plane test
+
+  test:
+    name: Typecheck and test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: source
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: aborder
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: aborder_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U aborder -d aborder_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: source/package-lock.json
+      - name: Verify package versions
+        run: node ../scripts/version.mjs check
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx tsc --noEmit
+      - name: Lint changed application files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          paths=(':(glob)source/**/*.ts' ':(glob)source/**/*.tsx')
+          cd ..
+          file_list="$(mktemp)"
+          trap 'rm -f "$file_list"' EXIT
+          if [[ -n "$BASE_SHA" ]] && git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git diff --diff-filter=ACMR --name-only -z "$BASE_SHA" HEAD -- "${paths[@]}" > "$file_list"
+          elif [[ "$GITHUB_REF_TYPE" != tag ]]; then
+            git ls-files -z -- "${paths[@]}" > "$file_list"
+          fi
+          files=()
+          while IFS= read -r -d '' path; do files+=("${path#source/}"); done < "$file_list"
+          if (( ${#files[@]} )); then
+            cd source
+            npx eslint -- "${files[@]}"
+          fi
+      - name: Migrate the test database
+        run: npx prisma migrate deploy
+        env:
+          DATABASE_URL: postgresql://aborder:ci-only@localhost:5432/aborder_test
+      - name: Test
+        run: npm test -- --pool=forks --maxWorkers=2
+        env:
+          TEST_DATABASE_URL: postgresql://aborder:ci-only@localhost:5432/aborder_test
+
+  backend:
+    name: Check backend (${{ matrix.arch }})
+    if: inputs.release != true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - id: version
+        run: |
+          version="$(node scripts/version.mjs check)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/backend-image
+        with:
+          arch: ${{ matrix.arch }}
+          version: ${{ steps.version.outputs.version }}
+
+  installer:
+    name: Check Windows x64 installer
+    if: inputs.release != true
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - run: npm test
+        working-directory: desktop
+      - run: node scripts/release-manifest.mjs --local --hosted
+      - run: node scripts/stage-management-config.mjs --ci-fixture
+      - run: npm run package:win
+        working-directory: desktop
+      - name: Verify installation and uninstall data retention
+        run: |
+          $version = node scripts/version.mjs check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/verify-installer.ps1 -Hosted -Version $version -InstallSmoke
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-x64-unsigned
+          path: |
+            desktop/dist/A-Border-SEO-Setup-*-x64.exe
+            desktop/dist/A-Border-SEO-Setup-*-x64.exe.blockmap
+            desktop/dist/latest.yml
+          if-no-files-found: error

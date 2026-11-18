@@ -58,6 +58,7 @@ export default async function SettingsPage({ searchParams }: Props) {
   if (!user) redirect("/login");
 
   const connected = hasToken(user.googleTokens);
+  const managed = process.env.ABORDER_MANAGED === "1" || process.env.ABORDER_HOSTED === "1";
   const [keys, schedule, webhook, email, mcp] = await Promise.all([
     apiKeyStatus(db, session.user.id),
     getScheduleSettings(db, session.user.id),
@@ -85,7 +86,8 @@ export default async function SettingsPage({ searchParams }: Props) {
           <SectionHeading
             id="profile-heading"
             title={t("Profile", "个人资料")}
-            description={t("From your Google account, updated each time you sign in.", "来自你的 Google 账号，每次登录时更新。")}
+            description={managed ? t("This workspace belongs to your registered A-Border SEO account.", "此工作台归属于你注册的 A-Border SEO 账号。")
+              : t("From your Google account, updated each time you sign in.", "来自你的 Google 账号，每次登录时更新。")}
           />
           <div className="panel flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex min-w-0 items-center gap-4">
@@ -96,10 +98,11 @@ export default async function SettingsPage({ searchParams }: Props) {
                   {user.name || <span className="font-normal text-muted-foreground">{t("No name from Google yet", "Google 尚未提供姓名")}</span>}
                 </dd>
                 <dt className="sr-only">{t("Email", "邮箱")}</dt>
-                <dd className="mt-0.5 font-data text-[13px] leading-5 break-all text-muted-foreground">{user.email}</dd>
+                <dd className="mt-0.5 font-data text-[13px] leading-5 break-all text-muted-foreground">{managed && user.email.endsWith("@managed.invalid")
+                  ? t("Registered desktop account", "客户端注册账号") : user.email}</dd>
               </dl>
             </div>
-            <SignOutButton />
+            <SignOutButton managed={managed} />
           </div>
         </section>
 
@@ -111,6 +114,7 @@ export default async function SettingsPage({ searchParams }: Props) {
           />
           <ConnectionsSection
             google={{
+              desktop: process.env.ABORDER_DESKTOP_MODE === "1",
               connected,
               scopes: connected ? grantedScopes(user.googleTokens) : [],
               sealed: isSealed(user.googleTokens),

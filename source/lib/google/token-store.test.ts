@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Encrypted Google tokens in User.googleTokens, on the real Prisma client
@@ -167,5 +167,41 @@ describe("getAccessToken", () => {
       },
     });
     await expect(getAccessToken("u4")).rejects.toMatchObject({ name: "ReauthRequiredError" });
+  });
+
+  it("returns a newly connected account's token instead of overwriting it with an in-flight old refresh", async () => {
+    await db.user.create({ data: { id: "u5", email: "race@example.test",
+      googleTokens: sealGoogleTokens({ accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 1 }) } });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await db.user.update({ where: { id: "u5" }, data: { googleTokens: sealGoogleTokens({
+        accessToken: "new-account-access", refreshToken: "new-account-refresh", expiresAt: Date.now() + 3_600_000,
+      }) } });
+      return Response.json({ access_token: "refreshed-old-account", expires_in: 3600 });
+    }));
+    expect(await getAccessToken("u5")).toBe("new-account-access");
+    expect(openGoogleTokens(await stored("u5"))).toMatchObject({ accessToken: "new-account-access", refreshToken: "new-account-refresh" });
+  });
+
+  it("does not restore tokens disconnected while a refresh request is in flight", async () => {
+    await db.user.create({ data: { id: "u6", email: "disconnect-race@example.test",
+      googleTokens: sealGoogleTokens({ accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 1 }) } });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await db.user.update({ where: { id: "u6" }, data: { googleTokens: Prisma.DbNull } });
+      return Response.json({ access_token: "refreshed-old-account", expires_in: 3600 });
+    }));
+    await expect(getAccessToken("u6")).rejects.toMatchObject({ name: "ReauthRequiredError" });
+    expect(await stored("u6")).toBeNull();
+  });
+
+  it("recovers the new connection even when the old refresh itself fails", async () => {
+    await db.user.create({ data: { id: "u7", email: "failed-refresh-race@example.test",
+      googleTokens: sealGoogleTokens({ accessToken: "old-access", refreshToken: "old-refresh", expiresAt: 1 }) } });
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      await db.user.update({ where: { id: "u7" }, data: { googleTokens: sealGoogleTokens({
+        accessToken: "new-account-access", refreshToken: "new-account-refresh", expiresAt: Date.now() + 3_600_000,
+      }) } });
+      return Response.json({ error: "invalid_grant" }, { status: 400 });
+    }));
+    expect(await getAccessToken("u7")).toBe("new-account-access");
   });
 });

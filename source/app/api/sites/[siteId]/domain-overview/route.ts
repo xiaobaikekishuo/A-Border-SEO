@@ -69,7 +69,7 @@ async function handle(
       domain: targetDomain,
       overview: {
         organicKeywords: metrics.current.uniqueKeywords,
-        organicTraffic: metrics.current.clicks,
+        organicTraffic: metrics.coverage.currentReportedDays > 0 ? metrics.current.clicks : null,
         organicCost: null,
         backlinks: null,
         referringDomains: null,

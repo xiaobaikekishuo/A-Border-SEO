@@ -50,7 +50,7 @@ function MetricCard({
 
 export async function DashboardMetrics({ siteId, days = 28 }: MetricsProps) {
   const { t } = await getI18n();
-  const { current, previous, deltas, coverage } = await getSitePeriodMetrics(siteId, days);
+  const { current, previous, deltas, coverage, basis } = await getSitePeriodMetrics(siteId, days);
   // CTR moves in percentage points, not as a percent of itself.
   const ctrPoints = coverage.comparable && current.impressions > 0 && previous.impressions > 0 ? (current.avgCtr - previous.avgCtr) * 100 : null;
   const insufficient = t("Insufficient history", "历史不足，暂不比较");
@@ -60,17 +60,17 @@ export async function DashboardMetrics({ siteId, days = 28 }: MetricsProps) {
 
   return (
     <>
-    <p className="mb-3 text-xs text-muted-foreground">{coverage.current.start} ~ {coverage.current.end} · {t("compared with", "对比")} {coverage.previous.start} ~ {coverage.previous.end} · {t("Synced days", "已确认同步天数")} {coverage.currentDays}/{days} + {coverage.previousDays}/{days}{!coverage.comparable && ` · ${t("Sync GSC to complete both periods; totals shown are the records available locally.", "请同步 GSC 补齐两个周期；当前数值为本地已有记录合计。")}`}</p>
+    <p className="mb-3 text-xs text-muted-foreground">{coverage.current.start} ~ {coverage.current.end} · {t("compared with", "对比")} {coverage.previous.start} ~ {coverage.previous.end} · {basis === "property" ? t("GSC property totals (Web, final)", "GSC 资源汇总（网页搜索，最终数据）") : t("GSC page-detail totals; sync for property totals", "GSC 页面明细合计；同步后可获取资源汇总")} · {t("Days with reported data", "有报告数据的天数")} {coverage.currentReportedDays}/{days} + {coverage.previousReportedDays}/{days}{!coverage.comparable && ` · ${t("Totals include only reported days; no comparison for incomplete periods.", "仅合计有数据的日期，周期不完整时不作环比。")}`}</p>
     <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-4">
       <MetricCard t={t}
         label={t("Clicks", "点击量")}
-        value={formatCompact(current.clicks)}
+        value={coverage.currentReportedDays ? formatCompact(current.clicks) : t("Not reported", "尚未报告")}
         delta={deltas.clicks}
         deltaLabel={percentLabel(deltas.clicks, previous.clicks, current.clicks)}
       />
       <MetricCard t={t}
         label={t("Impressions", "曝光量")}
-        value={formatCompact(current.impressions)}
+        value={coverage.currentReportedDays ? formatCompact(current.impressions) : t("Not reported", "尚未报告")}
         delta={deltas.impressions}
         deltaLabel={percentLabel(deltas.impressions, previous.impressions, current.impressions)}
       />

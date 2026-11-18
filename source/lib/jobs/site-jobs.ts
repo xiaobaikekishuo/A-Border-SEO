@@ -5,6 +5,8 @@ import { CRAWL_JOB } from "./handlers";
 import { canStartCrawl, clampMaxPages, type CrawlRequestSource } from "./policy";
 import { enqueueJob, MANUAL_PRIORITY, recoverStaleJobs } from "./queue";
 import type { JobSource } from "./types";
+import { hostedMode } from "@/lib/hosted/access";
+import { enqueueHostedDevice } from "./hosted-policy";
 
 /*
  * What the routes and the scheduler call: queue work for a site, and read
@@ -27,9 +29,10 @@ const isPerson = (source: JobSource) => source === "manual" || source === "mcp";
  * a running job is left alone.
  */
 async function takeOver(db: Db, job: Job, payload?: Prisma.InputJsonValue): Promise<Job> {
+  const hostedDeviceId = await enqueueHostedDevice(db, { ...job, source: "manual" });
   const { count } = await db.job.updateMany({
     where: { id: job.id, status: "QUEUED" },
-    data: { priority: MANUAL_PRIORITY, runAt: new Date(), ...(payload !== undefined && { payload }) },
+    data: { priority: MANUAL_PRIORITY, runAt: new Date(), ...(payload !== undefined && { payload }), ...(hostedMode() && { hostedDeviceId }) },
   });
   return count === 1 ? db.job.findUniqueOrThrow({ where: { id: job.id } }) : job;
 }

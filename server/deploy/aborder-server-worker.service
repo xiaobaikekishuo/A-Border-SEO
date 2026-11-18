@@ -1,0 +1,35 @@
+[Unit]
+Description=A-Border SEO hosted background worker
+After=network-online.target postgresql.service aborder-control.service
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=4
+
+[Service]
+Type=simple
+User=aborder-server
+Group=aborder-server
+WorkingDirectory=/opt/aborder-server/current/app
+EnvironmentFile=/etc/aborder-server/server.env
+ExecStart=/usr/bin/node --max-old-space-size=1536 /opt/aborder-server/current/server/deploy/service.mjs worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/aborder-server /var/cache/aborder-server
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=2048M
+CPUQuota=150%
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

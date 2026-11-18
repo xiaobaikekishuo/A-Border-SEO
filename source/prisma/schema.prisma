@@ -28,6 +28,9 @@ model User {
   settings      UserSettings?
   chatGptProfiles ChatGptProfile[]
   manusKeywordTasks ManusKeywordTask[]
+  desktopOAuthAttempts DesktopOAuthAttempt[]
+  managedIdentity ManagedIdentity?
+  hostedDevices HostedDevice[]
 }
 
 model Account {
@@ -54,8 +57,44 @@ model Session {
   sessionToken String   @unique
   userId       String
   expires      DateTime
+  managedNonceHash String?
+  managedInstallationId String?
+  hostedDeviceId String?
+  hostedBinding String?
 
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// A management account owns a distinct local user. Never infer this link from
+// an email address or transfer another user's existing sites during sign-in.
+model ManagedIdentity {
+  issuer String
+  productId String
+  accountId String
+  userId String @unique
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([issuer, productId, accountId])
+}
+
+// Verified control-plane device identity. Raw device credentials never enter this database.
+model HostedDevice {
+  id String @id @default(cuid())
+  issuer String
+  productId String
+  accountId String
+  installationId String
+  userId String
+  sessionBinding String
+  desktopVersion String
+  codexLogin Boolean @default(false)
+  lastSeenAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([issuer, productId, installationId])
+  @@index([userId])
 }
 
 model VerificationToken {
@@ -64,6 +103,32 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+// Before browser sign-in, only the opaque challenge and its expiration exist.
+model DesktopLoginChallenge {
+  id         String   @id
+  challenge  String
+  expiresAt  DateTime
+
+  @@index([expiresAt])
+}
+
+model DesktopOAuthAttempt {
+  id         String   @id
+  purpose    String
+  challenge  String
+  expiresAt  DateTime
+  status     String   @default("pending")
+  userId     String
+  siteId     String?
+  report     Json?
+  code       String?  // Short-lived encrypted GA4 authorization code
+
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@index([userId])
 }
 
 // ============ API KEYS (BYOK) ============
@@ -348,6 +413,7 @@ model ContentCluster {
 }
 
 model ContentPlanJob {
+  hostedDeviceId String?
   usage Json?
   kind String @default("PLAN")
   request Json?
@@ -363,6 +429,7 @@ model ContentPlanJob {
   appliedAt DateTime?
   leaseToken String?
   leaseExpiresAt DateTime?
+  executionAuthorizedAt DateTime?
   createdAt DateTime @default(now())
   startedAt DateTime?
   finishedAt DateTime?
@@ -419,6 +486,7 @@ model ChatGptInference {
 }
 
 model AiWorkbenchJob {
+  hostedDeviceId String?
   usage Json?
   id String @id
   siteId String
@@ -433,6 +501,7 @@ model AiWorkbenchJob {
   activeKey String? @unique
   leaseToken String?
   leaseExpiresAt DateTime?
+  executionAuthorizedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   startedAt DateTime?
@@ -772,6 +841,7 @@ enum AlertChannel {
 // LOCKED, retried with backoff, and taken back when the process running it
 // stops sending heartbeats.
 model Job {
+  hostedDeviceId String?
   id          String    @id @default(cuid())
   siteId      String
   type        String    // a type registered in lib/jobs/handlers.ts
@@ -819,6 +889,7 @@ model WorkerHeartbeat {
   version    String
   startedAt  DateTime
   lastSeenAt DateTime
+  managedPolicy String?
 
   @@index([lastSeenAt])
 }
@@ -842,6 +913,10 @@ model GscSyncCoverage {
   gscProperty String
   pagesComplete Boolean @default(false)
   queryPagesComplete Boolean @default(false)
+  propertyChecked Boolean @default(false)
+  propertyClicks Int?
+  propertyImpressions Int?
+  propertyPosition Float?
   syncedAt DateTime @default(now())
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
   @@unique([siteId, date])

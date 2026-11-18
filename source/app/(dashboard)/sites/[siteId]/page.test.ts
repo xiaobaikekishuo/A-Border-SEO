@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 // gate on keywords alone and told such sites to "run a sync" forever.
 
 const counts = vi.hoisted(() => ({ keywords: 0, pages: 0 }));
+const coverage = vi.hoisted((): { gscProperty: string }[] => []);
 type Activity = {
   active: { jobId: string; status: "QUEUED" | "RUNNING"; crawlId: string | null } | null;
   failed: { id: string; error: string | null; finishedAt: Date | null } | null;
@@ -26,6 +27,7 @@ vi.mock("@/lib/db", () => ({
         domain: "a.example",
         gscProperty: "https://a.example/",
         _count: counts,
+        gscSyncCoverage: coverage,
       }),
     },
     crawl: { findFirst: async () => null },
@@ -57,6 +59,14 @@ async function render(next: typeof counts): Promise<string> {
 }
 
 describe("site overview empty state", () => {
+  it("opens the overview after a property-only sync, even without detail rows", async () => {
+    coverage.push({ gscProperty: "https://a.example/" });
+    try {
+      expect(await render({ keywords: 0, pages: 0 })).not.toContain("Waiting for GSC data");
+      coverage[0].gscProperty = "https://old.example/";
+      expect(await render({ keywords: 0, pages: 0 })).toContain("Waiting for GSC data");
+    } finally { coverage.length = 0; }
+  });
   it("shows the empty state before any sync", async () => {
     const html = await render({ keywords: 0, pages: 0 });
     expect(html).toContain("Waiting for GSC data");

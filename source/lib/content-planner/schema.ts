@@ -3,6 +3,7 @@ import { articleReviewSchema } from "./article-review-schema";
 import { workbenchResultSchema } from "@/lib/ai-workbench/schema";
 import { aiUsageSchema } from "@/lib/ai-usage/schema";
 import { validFunnelCounts } from "./funnel";
+import { keywordSelectionSchema } from "./keyword-selection";
 
 const text = (max = 500) => z.string().trim().min(1).max(max);
 const optionalText = z.string().trim().max(4000).optional();
@@ -67,7 +68,8 @@ export const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("bulkUpdateClusters"), clusterIds: z.array(id).min(1).max(50), data: bulkUpdateDataSchema }).strict(),
   z.object({ action: z.literal("seedExample") }).strict(),
   z.object({ action: z.literal("startPlan"), pillarId: id,
-    topicCount: z.number().int().min(3).max(18).multipleOf(3).default(9), funnelCounts: funnelCountsSchema.optional() }).strict()
+    topicCount: z.number().int().min(3).max(18).multipleOf(3).default(9), funnelCounts: funnelCountsSchema.optional(),
+    keywordSelection: keywordSelectionSchema.optional() }).strict()
     .refine(value => value.funnelCounts === undefined || validFunnelCounts(value.funnelCounts, value.topicCount), { path: ["funnelCounts"], message: "Funnel counts must add up to the requested topic count" }),
   z.object({ action: z.literal("applyPlan"), jobId: id,
     topicIndexes: z.array(z.number().int().min(0).max(17)).min(1).max(18),
@@ -75,9 +77,11 @@ export const actionSchema = z.discriminatedUnion("action", [
 ]);
 const lease = { jobId: id, leaseToken: text(200) };
 const workerUsage = aiUsageSchema.refine(value => value.source === "CODEX_CLI", "Worker usage must come from Codex CLI").nullable().optional();
+const workerMetadata = z.object({ codexLogin: z.boolean(), desktopVersion: z.string().max(64) }).strict().optional();
 export const workerActionSchema = z.discriminatedUnion("action", [
-  z.object({ action: z.literal("claim"), workerId: text(100) }).strict(),
-  z.object({ action: z.literal("heartbeat"), workerId: text(100), jobId: id.optional(), leaseToken: text(200).optional() }).strict(),
+  z.object({ action: z.literal("claim"), workerId: text(100), protocolVersion: z.literal(2).optional(), metadata: workerMetadata }).strict(),
+  z.object({ action: z.literal("begin"), ...lease }).strict(),
+  z.object({ action: z.literal("heartbeat"), workerId: text(100), jobId: id.optional(), leaseToken: text(200).optional(), metadata: workerMetadata }).strict(),
   z.object({ action: z.literal("complete"), ...lease, result: z.union([planSchema, articleReviewSchema, workbenchResultSchema]), usage: workerUsage }).strict(),
   z.object({ action: z.literal("fail"), ...lease, error: text(2000), usage: workerUsage }).strict(),
 ]);

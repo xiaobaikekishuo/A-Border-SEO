@@ -1,6 +1,7 @@
 import type { Job, PrismaClient } from "@prisma/client";
 import { siteMarket, type ResearchMarket } from "@/lib/dataforseo/market";
 import { isServerless } from "@/lib/jobs/config";
+import { managedAllowsJob } from "@/lib/managed/policy";
 import { isPermanentJobError, JobError, JobLostError, JobReleasedError, type JobContext, type JobHandler } from "@/lib/jobs/types";
 import { askPlatform, claudeModels, pickClaudeModel, TASK_ESTIMATE_USD, TASK_TIMEOUT_MS, type AskResult, type DfsCredentials } from "./dataforseo-ai";
 import { DataForSeoError } from "./dataforseo-parse";
@@ -31,6 +32,7 @@ type RunState = { id: string; status: string; planned: number; done: number; fai
 type SiteRow = { id: string; userId: string; domain: string; researchLanguage: string; researchLocation: number };
 type Stop = { status: "PARTIAL" | "FAILED"; message: string; code: string };
 type RunStatus = "SUCCEEDED" | "PARTIAL" | "FAILED";
+const managedStop: Stop = { status: "PARTIAL", message: "Device management paused this run after its in-flight requests.", code: "MANAGED_RESTRICTED" };
 
 const trackingFields = { brands: true, platforms: true, scheduleDays: true, budgetUsd: true } as const;
 
@@ -214,6 +216,10 @@ async function executeRun(db: PrismaClient, run: RunState, plan: Plan, site: Sit
   const worker = async () => {
     try {
       while (!outcome.stopped && !outcome.fatal && !outcome.crash && !signal.aborted && next < tasks.length) {
+        if (!managedAllowsJob(GEO_VISIBILITY_JOB)) {
+          outcome.stopped ??= managedStop;
+          break;
+        }
         const { promptId, platform } = tasks[next];
         if (deadline !== undefined && Date.now() > deadline - TASK_TIMEOUT_MS - 10_000) {
           outcome.stopped ??= { status: "PARTIAL", message: "Stopped at the time limit of this host. Run again to finish.", code: "TIME_LIMIT" };
@@ -230,12 +236,21 @@ async function executeRun(db: PrismaClient, run: RunState, plan: Plan, site: Sit
         let answer: AskResult;
         try {
           answer = await askWithRetry(
-            () => askPlatform(credentials, { platform, prompt, market: plan.market, ownDomains, claudeModel: plan.claudeModel }, signal),
+            () => {
+              if (!managedAllowsJob(GEO_VISIBILITY_JOB)) {
+                throw new JobError(managedStop.message, { code: managedStop.code });
+              }
+              return askPlatform(credentials, { platform, prompt, market: plan.market, ownDomains, claudeModel: plan.claudeModel }, signal);
+            },
             signal,
           );
         } catch (error) {
           cost -= estimate;
           if (signal.aborted) break;
+          if (error instanceof JobError && error.code === managedStop.code) {
+            outcome.stopped ??= managedStop;
+            break;
+          }
           if (error instanceof DataForSeoError && (error.code === "AUTH" || error.code === "BALANCE")) {
             outcome.fatal ??= permanentFor(error);
             break;

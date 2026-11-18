@@ -1,0 +1,23 @@
+{
+  "name": "a-border-seo-desktop",
+  "productName": "A-Border SEO",
+  "version": "1.5.6",
+  "description": "Windows desktop application for the A-Border SEO workspace",
+  "author": "A-Border SEO contributors",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "package:win": "electron-builder --config electron-builder.cjs --win nsis --x64 --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11"
+  },
+  "devDependencies": {
+    "electron": "45.3.1",
+    "electron-builder": "26.18.0"
+  }
+}

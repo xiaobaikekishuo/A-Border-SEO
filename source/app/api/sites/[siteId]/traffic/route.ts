@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { getDailyTraffic } from "@/lib/seo-metrics";
+import { getDailyTrafficSeries } from "@/lib/seo-metrics";
+import { getGscDateRange } from "@/lib/date-utils";
 
 export async function GET(
   _req: Request,
@@ -28,8 +29,12 @@ export async function GET(
       180
     );
 
-    const data = await getDailyTraffic(siteId, days);
-    return Response.json(data);
+    if (!Number.isInteger(days)) return Response.json({ error: "Invalid day count" }, { status: 400 });
+    const range = getGscDateRange(days);
+    const data = await getDailyTrafficSeries(siteId, { startDate: range.start, endDate: range.end });
+    return Response.json(data.days, { headers: {
+      "Cache-Control": "private, no-store", "X-GSC-Basis": data.basis, "X-GSC-Start": range.start, "X-GSC-End": range.end,
+    } });
   } catch (error) {
     console.error("Error fetching traffic:", error);
     return Response.json({ error: "Failed to load traffic" }, { status: 500 });

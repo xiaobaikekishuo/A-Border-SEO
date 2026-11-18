@@ -1,0 +1,119 @@
+name: aborder-hosted
+services:
+  database:
+    image: ${HOSTED_POSTGRES_IMAGE:?set a pinned PostgreSQL 16 image}
+    pull_policy: never
+    env_file: [./config/database.env]
+    volumes: [database-data:/var/lib/postgresql/data]
+    networks: [business]
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 128
+    command: [postgres, -c, shared_buffers=96MB, -c, work_mem=4MB, -c, maintenance_work_mem=64MB, -c, max_connections=30]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  control:
+    image: ${HOSTED_CONTROL_IMAGE:?set a pinned control image}
+    pull_policy: never
+    env_file: [./config/control.env]
+    environment:
+      ABORDER_CONTROL_BIND: 0.0.0.0
+      ABORDER_CONTROL_PORT: '18085'
+      ABORDER_CONTROL_INTERNAL_BIND: 127.0.0.1
+      ABORDER_CONTROL_INTERNAL_PORT: '18086'
+      ABORDER_CONTROL_DB: /data/control.sqlite
+      ABORDER_CONTROL_SIGNING_KEY_FILE: /run/secrets/signing.pem
+    volumes:
+      - control-data:/data
+      - ./config/signing.pem:/run/secrets/signing.pem:ro
+    ports: ['127.0.0.1:18085:18085', '127.0.0.1:18330:18330']
+    networks: [business]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=64m']
+    mem_limit: 256m
+    cpus: 0.25
+    pids_limit: 64
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:18085/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  app:
+    image: ${HOSTED_APP_IMAGE:?set a pinned application image}
+    pull_policy: never
+    env_file: [./config/application.env]
+    network_mode: service:control
+    depends_on:
+      control: {condition: service_healthy}
+      database: {condition: service_healthy}
+    command: [node, --max-old-space-size=512, /tools/start.mjs, app]
+    volumes: [app-cache:/var/cache/aborder]
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=128m']
+    mem_limit: 768m
+    cpus: 0.75
+    pids_limit: 128
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  worker:
+    image: ${HOSTED_APP_IMAGE:?set a pinned application image}
+    pull_policy: never
+    env_file: [./config/application.env]
+    network_mode: service:control
+    depends_on:
+      control: {condition: service_healthy}
+      database: {condition: service_healthy}
+    command: [node, --max-old-space-size=768, /tools/start.mjs, worker]
+    restart: unless-stopped
+    stop_grace_period: 60s
+    read_only: true
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=64m']
+    mem_limit: 1024m
+    cpus: 0.75
+    pids_limit: 128
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+  tooling:
+    profiles: [tools]
+    image: ${HOSTED_APP_IMAGE:?set a pinned application image}
+    pull_policy: never
+    user: '0:0'
+    env_file: [./config/application.env, ./config/database.env]
+    network_mode: service:control
+    entrypoint: [node, /tools/database.mjs]
+    volumes: [./backups:/backups]
+    read_only: true
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=64m']
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 64
+  control-tools:
+    profiles: [tools]
+    image: ${HOSTED_CONTROL_IMAGE:?set a pinned control image}
+    pull_policy: never
+    user: '0:0'
+    network_mode: none
+    entrypoint: [node, /tools/control-backup.mjs]
+    volumes: [control-data:/data, app-cache:/cache, ./backups:/backups, ./import:/import:ro]
+    read_only: true
+    tmpfs: ['/tmp:rw,nosuid,nodev,size=64m']
+    mem_limit: 256m
+    pids_limit: 64
+networks:
+  business:
+    driver: bridge
+    # Keep outbound connectivity for Google, Bing and controlled site crawling.
+    internal: false
+volumes:
+  database-data:
+  control-data:
+  app-cache:

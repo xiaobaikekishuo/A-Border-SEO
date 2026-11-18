@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n/client";
+import { authorizeInBrowser, DesktopOAuthError, desktopBridge } from "@/lib/desktop/client";
 import { Ga4SetupGuide } from "./ga4-setup-guide";
 
 interface CodeResponse { code?: string; error?: string; }
@@ -48,9 +49,10 @@ export default function GeoGaConnection({siteId,domain,oauthClientId,expectedUpd
   const [status,setStatus] = useState("");
   const [clientId,setClientId] = useState("");
   const attempt = useRef(0);
+  const desktopAttempt = useRef<AbortController | null>(null);
   const locked = useRef(false);
   const endpoint = "/api/sites/" + encodeURIComponent(siteId) + "/geo/ga4";
-  useEffect(() => () => { attempt.current++; },[siteId]);
+  useEffect(() => () => { attempt.current++; desktopAttempt.current?.abort(); },[siteId]);
   const busy = stage === "preparing" || stage === "consent" || stage === "sync";
   const btn = "rounded-lg border border-border px-4 py-2 text-sm font-medium disabled:opacity-50";
   const field = "mt-1 block w-full rounded-lg border border-border bg-background p-2 text-sm";
@@ -71,6 +73,7 @@ export default function GeoGaConnection({siteId,domain,oauthClientId,expectedUpd
       case "GA_QUOTA": return t("The request limit was reached. Sync again later.", "已达到请求次数限制，请稍后同步。");
       case "GA_STALE": return t("This snapshot changed. Review the refreshed snapshot before syncing again.", "最新快照已变动，请核对刷新后的数据再同步。");
       case "GA_SESSION": return t("Sign in to this site again, then reopen the report.", "请重新登录当前站点，再打开报表。");
+      case "DESKTOP_ATTEMPT_EXPIRED": return t("The Google authorization request expired. Start again.", "Google 授权请求已过期，请重新发起。");
       default: return t("Could not confirm the sync. Refresh the snapshot and check the Google connection before trying again.", "同步状态待确认，请刷新快照并检查 Google 连接后再试。");
     }
   }
@@ -83,7 +86,7 @@ export default function GeoGaConnection({siteId,domain,oauthClientId,expectedUpd
       if (!config.ok) throw new Error(config.status === 401 ? "GA_SESSION" : "GA_CONFIG");
       const {clientId:client} = await config.json();
       if (typeof client !== "string" || !client) throw new Error("GA_CONFIG");
-      await loadIdentityScript();
+      if (!desktopBridge()) await loadIdentityScript();
       if (attempt.current === id) { setClientId(client); setStage("ready"); }
     } catch (err) {
       if (attempt.current === id) {
@@ -97,8 +100,6 @@ export default function GeoGaConnection({siteId,domain,oauthClientId,expectedUpd
     if (expectedUpdatedAt && !window.confirm(t("Replace the current GA4 snapshot for " + domain + " with this reporting period?", "用本次报表替换 " + domain + " 当前保存的 GA4 快照？"))) return;
     const id = ++attempt.current;
     const attemptedProperty = property.trim();
-    const oauth = identity();
-    if (!oauth) { setStage("idle"); return; }
     const reset = (info:string) => {
       if (id !== attempt.current) return;
       locked.current = false;
@@ -106,6 +107,29 @@ export default function GeoGaConnection({siteId,domain,oauthClientId,expectedUpd
       setStage("ready");
     };
     locked.current = true; setStage("consent"); setStatus("");
+    if (desktopBridge()) {
+      const controller = new AbortController();
+      desktopAttempt.current = controller;
+      const report = { propertyId: attemptedProperty, start, end, expectedUpdatedAt };
+      void authorizeInBrowser({ action: "ga4", siteId, report }, controller.signal, () => setStage("sync"))
+        .then(() => {
+          if (attempt.current !== id) return;
+          onSaved();
+          reset(t("GA4 report saved for this site.", "已保存当前站点的 GA4 报表。"));
+        })
+        .catch(error => {
+          if (attempt.current !== id) return;
+          if (error instanceof DesktopOAuthError && error.status === 409) {
+            onSaved(); reset(message("GA_STALE"));
+          } else {
+            reset(message(error instanceof Error ? error.message : "GA_NETWORK"));
+          }
+        })
+        .finally(() => { if (desktopAttempt.current === controller) desktopAttempt.current = null; });
+      return;
+    }
+    const oauth = identity();
+    if (!oauth) { locked.current = false; setStage("idle"); return; }
     try {
       oauth.initCodeClient({
         client_id:clientId,scope:"https://www.googleapis.com/auth/analytics.readonly",include_granted_scopes:false,ux_mode:"popup",
@@ -145,7 +169,7 @@ export default function GeoGaConnection({siteId,domain,oauthClientId,expectedUpd
       <div className="flex flex-wrap gap-2">
         {stage === "idle" || stage === "preparing" ? <button type="button" disabled={busy || disabled} className={btn} onClick={() => void prepare()}>{stage === "preparing" ? t("Loading Google sign-in…", "正在加载 Google 授权…") : t("Prepare Google connection", "准备 Google 连接")}</button> :
         <button type="button" className={btn} disabled={!valid || busy || disabled} onClick={authorize}>{stage === "consent" ? t("Waiting for Google…", "等待 Google 授权…") : stage === "sync" ? t("Reading report…", "正在读取报表…") : t("Authorize and sync report", "授权并同步报表")}</button>}
-        {stage === "consent" && <button type="button" className={btn} onClick={() => {attempt.current++; locked.current = false; setStage("ready");}}>{t("Cancel", "取消")}</button>}
+        {stage === "consent" && <button type="button" className={btn} onClick={() => {attempt.current++; desktopAttempt.current?.abort(); locked.current = false; setStage("ready");}}>{t("Cancel", "取消")}</button>}
       </div>
       {status && <p role="status" className="text-sm">{status}</p>}
     </div>

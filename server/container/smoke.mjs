@@ -1,0 +1,30 @@
+import assert from "node:assert/strict";
+import { randomBytes, createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, writeFileSync, unlinkSync, rmdirSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import tls from "node:tls";
+import { Worker } from "node:worker_threads";
+import { DatabaseSync } from "node:sqlite";
+
+assert.equal(process.versions.node.split(".")[0], "24");
+assert.equal(process.platform, "linux");
+assert.equal(process.arch, "x64");
+const directory = mkdtempSync(path.join(os.tmpdir(), "aborder-kernel-smoke-"));
+const filename = path.join(directory, "test.bin");
+const content = randomBytes(64);
+writeFileSync(filename, content, { mode: 0o600 });
+assert.equal(createHash("sha256").update(readFileSync(filename)).digest("hex"), createHash("sha256").update(content).digest("hex"));
+unlinkSync(filename);
+rmdirSync(directory);
+tls.createSecureContext({ minVersion: "TLSv1.2" });
+assert.ok(tls.rootCertificates.length > 0);
+const worker = new Worker("require('node:worker_threads').parentPort.postMessage(42)", { eval: true });
+assert.equal(await new Promise((resolve, reject) => { worker.once("message", resolve); worker.once("error", reject); }), 42);
+await worker.terminate();
+const db = new DatabaseSync(":memory:");
+db.exec("CREATE TABLE smoke(value INTEGER); INSERT INTO smoke VALUES(42)");
+assert.equal(db.prepare("SELECT value FROM smoke").get().value, 42);
+db.close();
+console.log(JSON.stringify({ ok: true, node: process.version, kernel: os.release(), glibc: process.report.getReport().header.glibcVersionRuntime,
+  checks: ["crypto", "filesystem", "tls", "worker_threads", "node_sqlite"] }));

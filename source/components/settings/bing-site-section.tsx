@@ -5,6 +5,8 @@ import { useUiText, identityUiText, type UiTranslator } from "@/components/ui/ui
 
 
 import { useState } from "react";
+import Link from "next/link";
+import { useI18n } from "@/lib/i18n/client";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, Loader2, RefreshCw, Save, XCircle } from "lucide-react";
 import {
@@ -29,6 +31,7 @@ export function BingSiteSection({
   bingSite: string | null;
 }) {
   const ui = useUiText();
+  const { t } = useI18n();
   const router = useRouter();
   const [sites, setSites] = useState<BingSite[]>([]);
   const [selected, setSelected] = useState(bingSite ?? "");
@@ -39,6 +42,15 @@ export function BingSiteSection({
   const [error, setError] = useState<string | null>(null);
   const [canRetry, setCanRetry] = useState(false);
 
+  function connectionError(code: unknown) {
+    if (code === "BING_PROPERTY_MISMATCH") return t("Choose a Bing property with the same hostname as this site, including www if present.", "请选择主机名与当前网站一致的 Bing 资源，包括是否带 www。");
+    if (code === "BING_PROPERTY_UNAVAILABLE") return t("This Bing account cannot access that property. Refresh the list and choose a verified site.", "当前 Bing 账号无法访问该资源，请刷新列表并选择已验证的网站。");
+    if (code === "BING_KEY_MISSING") return t("Connect Bing Webmaster Tools in account settings first.", "请先在账号设置中连接 Bing 站长工具。");
+    if (code === "BING_CONNECTION_RESTRICTED") return t("Bing connection changes are paused by workspace policy or maintenance.", "当前工作台策略或维护状态暂停了 Bing 连接操作。");
+    if (code === "INVALID_BING_PROPERTY") return t("Choose a valid Bing website URL.", "请选择有效的 Bing 网站资源地址。");
+    return t("Could not verify the Bing connection. Check the saved API key and network, then retry.", "暂时无法验证 Bing 连接，请检查已保存的 API 密钥和网络后重试。");
+  }
+
   async function loadSites() {
     setLoading(true);
     setError(null);
@@ -46,7 +58,7 @@ export function BingSiteSection({
     try {
       const res = await fetch("/api/bing/sites");
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || ui("Failed to load Bing sites"));
+      if (!res.ok) throw new Error(connectionError(data.code));
       setSites(data as BingSite[]);
       if (!data.length) setError(ui("This Bing account has no verified sites."));
     } catch (err) {
@@ -77,7 +89,7 @@ export function BingSiteSection({
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || ui("Failed to save"));
+        throw new Error(connectionError(data.code));
       }
       setMessage(ui("Bing property connected."));
       router.refresh();
@@ -101,7 +113,7 @@ export function BingSiteSection({
         body: JSON.stringify({ siteId }),
       });
       const queued = await res.json();
-      if (!res.ok) throw new Error(queued.error || ui("Sync failed"));
+      if (!res.ok) throw new Error(connectionError(queued.code));
       // The sync runs as a job: wait for it, and say why when it waits or retries.
       const job = await waitForJob(queued.jobId, {
         onUpdate: (j) => setMessage(pendingNote(j, ui) ?? (j.status === "RUNNING" ? ui("Syncing…") : ui("Queued…"))),
@@ -112,7 +124,7 @@ export function BingSiteSection({
         setCanRetry(true);
         return;
       }
-      if (job.status === "FAILED") throw new Error(job.lastError || ui("Sync failed"));
+      if (job.status === "FAILED") throw new Error(t("Bing sync failed. Check the connection and retry.", "Bing 同步失败，请检查连接后重试。"));
       const data = (job.result ?? {}) as {
         daysUpserted?: number;
         queriesUpserted?: number;
@@ -138,7 +150,7 @@ export function BingSiteSection({
   }
 
   return (
-    <div className="panel p-5">
+    <div id="bing-connection" className="panel p-5">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h3 className="text-[15px] leading-5 font-semibold text-text-strong">
@@ -197,6 +209,9 @@ export function BingSiteSection({
               )}
               {ui("Sync Bing")}</Button>
           )}
+          {bingSite && <Link href={`/sites/${siteId}/bing`} className="text-link text-sm font-medium">
+            {t("View Bing reports", "查看 Bing 报表")}
+          </Link>}
         </div>
 
         {message && <p className="text-xs text-success">{message}</p>}

@@ -1,0 +1,36 @@
+# Create four separate files. Do not copy this combined document as an env file.
+# All *.env files: root:root mode 0600, inside /www/aborder-hosted/config mode 0700.
+
+# application.env
+NODE_ENV=production
+ABORDER_HOSTED=1
+NEXTAUTH_URL=https://aborder.tuitehao.shop
+NEXTAUTH_SECRET=PRESERVE_ORIGINAL_ENCRYPTION_SECRET
+AUTH_TRUST_HOST=true
+DATABASE_URL=postgresql://aborder:URL_ENCODED_RANDOM_APP_PASSWORD@database:5432/aborder?schema=public&connection_limit=4&pool_timeout=20
+# One pool per process: app 4 + worker 4 connections. PostgreSQL allows 30;
+# reserve headroom for tooling and administration. Budget the sum across all
+# additional processes or replicas, preserving any existing URL parameters.
+ABORDER_CONTROL_INTERNAL_URL=http://127.0.0.1:18086
+ABORDER_CONTROL_INTERNAL_SECRET=SHARED_RANDOM_32_BYTE_BASE64URL_VALUE
+# Preserve existing Google OAuth/SMTP/provider settings here. Never put a
+# single user's deviceToken or LOCAL_CONTENT_WORKER_TOKEN in this shared env.
+
+# database.env (tooling can read admin credentials; app/worker cannot)
+POSTGRES_USER=postgres
+POSTGRES_DB=aborder
+POSTGRES_PASSWORD=INDEPENDENT_RANDOM_POSTGRES_ADMIN_PASSWORD
+
+# control.env
+NODE_ENV=production
+ABORDER_CONTROL_ORIGIN=https://aborder.tuitehao.shop
+ABORDER_CONTROL_ISSUER=https://aborder.nxitek.cn
+ABORDER_CONTROL_SIGNING_KID=PRESERVE_ORIGINAL_KEY_IDENTIFIER
+ABORDER_CONTROL_LEASE_SECONDS=900
+ABORDER_CONTROL_INTERNAL_SECRET=SHARED_RANDOM_32_BYTE_BASE64URL_VALUE
+
+# compose.env: copy the builder-generated compose.pins.env exactly.
+# HOSTED_APP_IMAGE=sha256:<64 hex>
+# HOSTED_CONTROL_IMAGE=sha256:<64 hex>
+# HOSTED_POSTGRES_IMAGE=sha256:<64 hex>
+# signing.pem: original Ed25519 private key, root:10001 mode 0440.

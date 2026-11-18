@@ -1,5 +1,5 @@
 import { db } from "@/lib/db";
-import { fetchSearchAnalytics, fetchPageAnalytics, gscDate } from "@/lib/google";
+import { fetchSearchAnalytics, fetchPageAnalytics, fetchPropertyAnalytics, gscDate } from "@/lib/google";
 import { getGscDateRange } from "@/lib/date-utils";
 
 import { aggregateByQueryAndDate } from "@/lib/google/aggregate";
@@ -73,10 +73,12 @@ export async function runGSCSync(
 ): Promise<SyncResult> {
   // Refresh both comparison periods. Only completed API responses can establish coverage.
   const { start, end } = getGscDateRange(Math.max(56, daysBack));
-  const [queryPages, pages] = await Promise.all([
+  const [queryPages, pages, propertyDays] = await Promise.all([
     fetchSearchAnalytics(userId, gscProperty, start, end, ["query", "page", "date"], undefined, true),
     fetchPageAnalytics(userId, gscProperty, start, end),
+    fetchPropertyAnalytics(userId, gscProperty, start, end),
   ]);
+  const propertyByDay = new Map(propertyDays.map(row => [gscDate(row.date).getTime(), row]));
   const keywords = aggregateByQueryAndDate(queryPages);
   const keywordData = keywords.map(row => ({ siteId, query: row.query, date: gscDate(row.date),
     clicks: row.clicks, impressions: row.impressions, ctr: row.ctr, position: row.position,
@@ -118,7 +120,10 @@ export async function runGSCSync(
       for (let i = 0; i < dayKeywords.length; i += 500) await tx.keyword.createMany({ data: dayKeywords.slice(i, i + 500) });
       for (let i = 0; i < dayPages.length; i += 500) await tx.page.createMany({ data: dayPages.slice(i, i + 500) });
       for (let i = 0; i < dayDetails.length; i += 500) await tx.queryPage.createMany({ data: dayDetails.slice(i, i + 500) });
-      await tx.gscSyncCoverage.createMany({ data: [{ siteId, date: day, gscProperty, pagesComplete: true, queryPagesComplete: true }] });
+      const property = propertyByDay.get(day.getTime());
+      await tx.gscSyncCoverage.createMany({ data: [{ siteId, date: day, gscProperty, pagesComplete: true, queryPagesComplete: true,
+        propertyChecked: true, propertyClicks: property?.clicks ?? null,
+        propertyImpressions: property?.impressions ?? null, propertyPosition: property?.position ?? null }] });
     }, { timeout: 60000 });
   }
   return {

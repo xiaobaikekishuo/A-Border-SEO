@@ -1,0 +1,38 @@
+name: Build and test backend
+description: Build one Linux architecture and start the migrated app and worker
+inputs:
+  arch:
+    required: true
+    description: amd64 or arm64
+  version:
+    required: true
+    description: Application version
+runs:
+  using: composite
+  steps:
+    - id: revision
+      shell: bash
+      run: |
+        revision="$(git rev-parse HEAD)"
+        echo "sha=$revision" >> "$GITHUB_OUTPUT"
+    - uses: docker/setup-buildx-action@v4
+    - uses: docker/build-push-action@v7
+      with:
+        context: ./source
+        file: ./source/Dockerfile
+        platforms: linux/${{ inputs.arch }}
+        load: true
+        tags: aborder-seo-ci:${{ github.sha }}
+        labels: |
+          org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          org.opencontainers.image.revision=${{ steps.revision.outputs.sha }}
+          org.opencontainers.image.version=${{ inputs.version }}
+          org.opencontainers.image.licenses=MIT
+        cache-from: type=gha,scope=${{ inputs.arch }}
+        cache-to: type=gha,scope=${{ inputs.arch }},mode=max
+    - name: Smoke test migrations, web app and worker
+      shell: bash
+      env:
+        IMAGE: aborder-seo-ci:${{ github.sha }}
+        VERSION: ${{ inputs.version }}
+      run: bash scripts/smoke-image.sh "$IMAGE" "$VERSION"
