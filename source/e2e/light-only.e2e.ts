@@ -14,13 +14,13 @@ test("both OS preferences render the fixed dark UI", async ({ page }) => {
       scheme: getComputedStyle(document.documentElement).colorScheme,
       htmlClass: document.documentElement.className,
     }));
-    expect(background, `${colorScheme} OS preference`).toBe("rgb(8, 14, 28)");
+    expect(background, `${colorScheme} OS preference`).toBe("rgb(11, 13, 17)");
     expect(scheme).toBe("dark");
     expect(htmlClass).toMatch(/\bdark\b/);
   }
 });
 
-test("body text is Inter and mono labels are Geist Mono", async ({ page }) => {
+test("login text uses Inter and the code font is Geist Mono", async ({ page }) => {
   await page.goto("/login");
   await page.evaluate(() => document.fonts.ready);
 
@@ -28,11 +28,11 @@ test("body text is Inter and mono labels are Geist Mono", async ({ page }) => {
   expect(bodyFont).toMatch(/^"?Inter"?,/);
   expect(bodyFont).toMatch(/sans-serif$/);
 
-  // The sign-in button label uses mono-button; a mono-label span uses the same family.
+  // Action and data labels use the text face. Code retains the monospace face.
   const buttonFont = await page
-    .getByRole("button", { name: "Continue with Google" })
+    .getByRole("button", { name: /Continue with Google|使用 Google 继续/ })
     .evaluate((el) => getComputedStyle(el).fontFamily);
-  expect(buttonFont).toMatch(/^"?Geist Mono"?,/);
+  expect(buttonFont).toBe(bodyFont);
 
   const labelFont = await page.evaluate(() => {
     const span = document.createElement("span");
@@ -43,13 +43,12 @@ test("body text is Inter and mono labels are Geist Mono", async ({ page }) => {
     span.remove();
     return family;
   });
-  expect(labelFont).toMatch(/^"?Geist Mono"?,/);
-  expect(labelFont).toMatch(/monospace$/);
+  expect(labelFont).toBe(bodyFont);
 
   // The fonts actually loaded, not just named.
-  const loaded = await page.evaluate(() => ({
-    inter: document.fonts.check('16px "Inter"'),
-    mono: document.fonts.check('12px "Geist Mono"'),
+  const loaded = await page.evaluate(async () => ({
+    inter: (await document.fonts.load('16px "Inter"')).length > 0,
+    mono: (await document.fonts.load('12px "Geist Mono"')).length > 0,
   }));
   expect(loaded).toEqual({ inter: true, mono: true });
 });

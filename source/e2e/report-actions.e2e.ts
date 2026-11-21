@@ -41,6 +41,7 @@ for (const language of ["zh", "en"] as const) {
     const zh = language === "zh";
     const origin = "http://127.0.0.1:3210";
     const path = "/api/sites/report-fixture/assistant/action-evidence?scope=weekly";
+    const settingsPath = "/api/sites/report-fixture/research-settings";
     const revision = "b".repeat(64);
     const observed: string[] = [];
     let hasData = false;
@@ -51,6 +52,10 @@ for (const language of ["zh", "en"] as const) {
         return;
       }
       observed.push(route.request().method() + " " + url.origin + url.pathname + url.search);
+      if (url.href === origin + settingsPath && route.request().method() === "GET") {
+        await route.fulfill({ json: { language: zh ? "zh-CN" : "en" } });
+        return;
+      }
       if (url.href !== origin + path || route.request().method() !== "GET") { await route.abort(); return; }
       await route.fulfill({ json: { site: { id: "report-fixture", domain: "paper.test" }, scope: "weekly", revision, hasData,
         period: { start: "2026-11-09", end: "2026-11-15", previousStart: "2026-11-02", previousEnd: "2026-11-08" },
@@ -84,6 +89,6 @@ for (const language of ["zh", "en"] as const) {
     await expect(links).toHaveCount(2);
     await expect(links.first()).toHaveAttribute("href", "/sites/report-fixture/vitals");
     await expect(links.last()).toHaveAttribute("href", "/sites/report-fixture/assistant?url=https%3A%2F%2Fpaper.test%2Fguide");
-    expect(observed).toEqual(["GET " + origin + path, "GET " + origin + path]);
+    expect(observed.sort()).toEqual(["GET " + origin + settingsPath, "GET " + origin + path, "GET " + origin + path].sort());
   });
 }
