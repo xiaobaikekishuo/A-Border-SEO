@@ -1,13 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Play, Plus, RefreshCw, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowDown, ArrowUp, Play, Plus, RefreshCw, Trash2, X } from "lucide-react";
 import { useI18n } from "@/lib/i18n/client";
 import type { Translator } from "@/lib/i18n/shared";
 import { TASK_ESTIMATE_USD } from "@/lib/geo/costs";
 import { GEO_PLATFORMS, geoPlatform, TRACKED_PLATFORMS, type GeoPlatformId } from "@/lib/geo/platforms";
-import type { LatestCell, RunRow, TrackingSettings, TrackingWorkspace } from "@/lib/geo/tracking";
+import type { AnswerReview, LatestCell, ReviewSummary, RunRow, TrackingSettings, TrackingWorkspace } from "@/lib/geo/tracking";
 import type { BrandEntity } from "@/lib/geo/visibility-rules";
+import type { FactHint } from "@/lib/geo/fact-check";
+import type { SourceType } from "@/lib/geo/citation-gap";
+import { compareRates, SMALL_SAMPLE } from "@/lib/geo/stats";
 import { geoErrorMessage } from "./geo-errors";
 import { announceGeoUpdate } from "./geo-events";
 
@@ -17,9 +20,16 @@ type Answer = {
   createdAt: string; costUsd: number; meta: { model?: string | null; consulted?: number; fanOut?: string[]; organicRank?: number | null };
   analysis: { ownMentioned: boolean; ownCited: boolean; ownRank: number | null; mentionRank: number | null; mentions: { name: string; own: boolean; count: number }[] };
   citations: { url: string; domain: string; title: string | null; rank: number; owner: string | null }[];
-  history: { id: string; createdAt: string; source: string; status: string; ownMentioned: boolean; ownCited: boolean }[];
+  sample: number;
+  review: AnswerReview | null;
+  facts: FactHint[];
+  history: { id: string; createdAt: string; source: string; status: string; ownMentioned: boolean; ownCited: boolean; runId: string | null; sample: number; review: AnswerReview | null }[];
 };
 type EntityDraft = { name: string; aliases: string; domains: string };
+type FactDraft = { label: string; value: string };
+
+const MAX_FACTS = 20;
+const MAX_SAMPLES = 5;
 
 const MAX_COMPETITORS = 10;
 const INPUT = "rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-brand-500 focus:outline-none";
@@ -37,6 +47,14 @@ function entityOf(draft: EntityDraft): BrandEntity {
 function platformName(id: string, locale: string): string {
   const platform = geoPlatform(id as GeoPlatformId);
   return platform ? (locale === "zh" ? platform.nameZh : platform.name) : id;
+}
+
+function sourceTypeName(type: SourceType, t: Translator): string {
+  return {
+    REVIEW: t("Reviews and lists", "评测与榜单"), FORUM: t("Forum or Q&A", "论坛与问答"), VIDEO: t("Video", "视频"),
+    ENCYCLOPEDIA: t("Encyclopedia", "百科"), NEWS: t("News and media", "新闻媒体"), BLOG: t("Blog platform", "博客平台"),
+    SOCIAL: t("Social", "社交平台"), GOV_EDU: t("Government or education", "政府与教育"), OTHER: t("Other", "其他"),
+  }[type];
 }
 
 function runStatus(run: RunRow, t: Translator): string {
@@ -64,6 +82,11 @@ function mark(cell: LatestCell | undefined, t: Translator): { kind: Mark; title:
   if (!cell) return { kind: "NONE", title: t("No answer yet", "尚无回答") };
   if (cell.status === "FAILED") return { kind: "FAILED", title: cell.error ?? t("Failed", "失败") };
   if (cell.status === "NO_ANSWER") return { kind: "NO_ANSWER", title: t("The platform showed no AI answer", "平台未给出 AI 回答") };
+  if (cell.samples > 1) {
+    // Several answers to the same prompt: the mark shows what most of them did.
+    const kind: Mark = cell.citedIn * 2 >= cell.samples ? "CITED" : cell.namedIn * 2 >= cell.samples ? "NAMED" : "NOT_NAMED";
+    return { kind, title: t("Named in {named} of {n} answers, cited in {cited}", "{n} 个回答中提及 {named} 次，引用 {cited} 次", { named: cell.namedIn, cited: cell.citedIn, n: cell.samples }) };
+  }
   if (cell.ownCited) return { kind: "CITED", title: t("Cited (source #{rank})", "被引用（第 {rank} 个来源）", { rank: cell.ownRank ?? "?" }) };
   if (cell.ownMentioned) return { kind: "NAMED", title: t("Named, not cited", "被提及但未引用") };
   return { kind: "NOT_NAMED", title: cell.competitors.length ? t("Not named; names {list}", "未提及；提到了 {list}", { list: cell.competitors.join(", ") }) : t("Not named", "未提及") };
@@ -77,7 +100,67 @@ function MarkIcon({ kind }: { kind: Mark }) {
   return <span className={`inline-block size-2.5 rounded-full ${style}`} aria-hidden />;
 }
 
-function AnswerPanel({ siteId, answerId, onClose, onDeleted }: { siteId: string; answerId: string; onClose: () => void; onDeleted: (workspace: TrackingWorkspace) => void }) {
+const ACCURACY: Record<NonNullable<AnswerReview["accuracy"]>, [string, string]> = {
+  ACCURATE: ["Accurate", "准确"], PARTLY: ["Partly accurate", "部分准确"], INACCURATE: ["Inaccurate", "不准确"],
+};
+const SENTIMENT: Record<NonNullable<AnswerReview["sentiment"]>, [string, string]> = {
+  POSITIVE: ["Positive", "正面"], NEUTRAL: ["Neutral", "中性"], NEGATIVE: ["Negative", "负面"],
+};
+
+function ReviewForm({ siteId, answer, onSaved }: { siteId: string; answer: Answer; onSaved: (answer: Answer, workspace: TrackingWorkspace) => void }) {
+  const { t } = useI18n();
+  const [accuracy, setAccuracy] = useState<AnswerReview["accuracy"]>(answer.review?.accuracy ?? null);
+  const [sentiment, setSentiment] = useState<AnswerReview["sentiment"]>(answer.review?.sentiment ?? null);
+  const [note, setNote] = useState(answer.review?.note ?? "");
+  const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
+  const [error, setError] = useState("");
+  async function save() {
+    setState("saving"); setError("");
+    try {
+      const res = await fetch(`/api/sites/${siteId}/geo/tracking/answers`, {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, cache: "no-store",
+        body: JSON.stringify({ id: answer.id, accuracy, sentiment, note }),
+      });
+      const body = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(typeof body?.error === "string" ? geoErrorMessage(body.error, t) : t("Saving failed.", "保存失败。"));
+      onSaved(body.answer as Answer, body.workspace as TrackingWorkspace);
+      setState("saved");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setState("idle");
+    }
+  }
+  return <div className="space-y-2 rounded-md border border-border p-3">
+    <div className="font-medium">{t("Your review", "人工复核")}</div>
+    <p className="text-xs text-muted-foreground">{t("Is what it says about the brand right, and how does it speak of it? Labels count in the platform summaries.", "回答对品牌的描述是否正确、语气如何？标注会计入各平台汇总。")}</p>
+    {answer.facts.length > 0 && <div className="text-xs">
+      <div className="text-muted-foreground">{t("Fact card, first pass (literal matching; you decide):", "事实卡初查（按文字匹配，由你判断）：")}</div>
+      <ul className="mt-1 space-y-0.5">{answer.facts.map(f => <li key={f.label}>
+        <span className={f.status === "STATED" ? "text-success" : f.status === "CHECK" ? "text-warning" : "text-muted-foreground"}>
+          {f.status === "STATED" ? t("stated", "已写明") : f.status === "CHECK" ? t("check", "需核对") : t("not mentioned", "未提及")}
+        </span> · {f.label}: {f.value}
+      </li>)}</ul>
+    </div>}
+    <div className="flex flex-wrap gap-2">
+      <select className={INPUT} value={accuracy ?? ""} aria-label={t("Accuracy", "准确度")} onChange={e => { setAccuracy((e.target.value || null) as AnswerReview["accuracy"]); setState("idle"); }}>
+        <option value="">{t("Accuracy: not reviewed", "准确度：未复核")}</option>
+        {(Object.keys(ACCURACY) as (keyof typeof ACCURACY)[]).map(key => <option key={key} value={key}>{t(ACCURACY[key][0], ACCURACY[key][1])}</option>)}
+      </select>
+      <select className={INPUT} value={sentiment ?? ""} aria-label={t("Sentiment", "情感倾向")} onChange={e => { setSentiment((e.target.value || null) as AnswerReview["sentiment"]); setState("idle"); }}>
+        <option value="">{t("Sentiment: not reviewed", "情感倾向：未复核")}</option>
+        {(Object.keys(SENTIMENT) as (keyof typeof SENTIMENT)[]).map(key => <option key={key} value={key}>{t(SENTIMENT[key][0], SENTIMENT[key][1])}</option>)}
+      </select>
+    </div>
+    <textarea className={`${INPUT} min-h-14 w-full`} maxLength={500} placeholder={t("Note: what is wrong or missing (optional)", "备注：哪里有误或缺失（可选）")} value={note} onChange={e => { setNote(e.target.value); setState("idle"); }} />
+    <div className="flex items-center gap-3">
+      <button type="button" className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted disabled:opacity-50" disabled={state === "saving"} onClick={() => void save()}>{state === "saving" ? t("Saving…", "保存中…") : t("Save review", "保存复核")}</button>
+      {state === "saved" && <span className="text-xs text-success" role="status">{t("Saved.", "已保存。")}</span>}
+      {error && <span className="text-xs text-danger" role="alert">{error}</span>}
+    </div>
+  </div>;
+}
+
+function AnswerPanel({ siteId, answerId, onClose, onDeleted, onChanged }: { siteId: string; answerId: string; onClose: () => void; onDeleted: (workspace: TrackingWorkspace) => void; onChanged: (workspace: TrackingWorkspace) => void }) {
   const { t, locale } = useI18n();
   const [answer, setAnswer] = useState<Answer | null>(null);
   const [current, setCurrent] = useState(answerId);
@@ -122,6 +205,7 @@ function AnswerPanel({ siteId, answerId, onClose, onDeleted }: { siteId: string;
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
           <span>{new Date(answer.createdAt).toLocaleString()}</span>
           <span>{answer.source === "MANUAL" ? t("Recorded by hand", "手动记录") : "DataForSEO"}</span>
+          {answer.sample > 0 && <span>{t("answer #{n} of its run", "本次运行的第 {n} 个回答", { n: answer.sample + 1 })}</span>}
           {answer.meta.model && <span>{t("Model", "模型")}: {answer.meta.model}</span>}
           {answer.costUsd > 0 && <span>{usd(answer.costUsd)}</span>}
           {answer.meta.organicRank != null && <span>{t("Organic rank on the same page: {n}", "同一结果页自然排名：{n}", { n: answer.meta.organicRank })}</span>}
@@ -142,11 +226,12 @@ function AnswerPanel({ siteId, answerId, onClose, onDeleted }: { siteId: string;
         </div>}
         {answer.meta.fanOut && answer.meta.fanOut.length > 0 && <div className="text-xs"><span className="font-medium">{t("Searches it ran", "它执行的搜索")}: </span>{answer.meta.fanOut.join(" · ")}</div>}
         {answer.text && <div><div className="font-medium">{t("Answer", "回答")}</div><div className="mt-1 max-h-[45vh] overflow-y-auto whitespace-pre-wrap rounded-md border border-border p-3 text-xs leading-relaxed">{answer.text}</div></div>}
+        {answer.status === "OK" && <ReviewForm key={answer.id} siteId={siteId} answer={answer} onSaved={(next, workspace) => { setAnswer(next); onChanged(workspace); }} />}
         {answer.history.length > 1 && <div>
           <div className="font-medium">{t("Earlier answers", "历史回答")}</div>
           <ul className="mt-1 space-y-0.5 text-xs">{answer.history.map(h => <li key={h.id}>
             <button type="button" className={`text-left hover:underline ${h.id === answer.id ? "font-medium" : ""}`} onClick={() => setCurrent(h.id)}>
-              {new Date(h.createdAt).toLocaleDateString()} · {h.status === "OK" ? (h.ownCited ? t("cited", "引用") : h.ownMentioned ? t("named", "提及") : t("not named", "未提及")) : h.status === "NO_ANSWER" ? t("no AI answer", "无 AI 回答") : t("failed", "失败")}{h.source === "MANUAL" ? ` · ${t("by hand", "手动")}` : ""}
+              {new Date(h.createdAt).toLocaleDateString()}{h.sample > 0 ? ` #${h.sample + 1}` : ""} · {h.status === "OK" ? (h.ownCited ? t("cited", "引用") : h.ownMentioned ? t("named", "提及") : t("not named", "未提及")) : h.status === "NO_ANSWER" ? t("no AI answer", "无 AI 回答") : t("failed", "失败")}{h.source === "MANUAL" ? ` · ${t("by hand", "手动")}` : ""}{h.review?.accuracy ? ` · ${t(ACCURACY[h.review.accuracy][0], ACCURACY[h.review.accuracy][1])}` : ""}
             </button>
           </li>)}</ul>
         </div>}
@@ -167,6 +252,8 @@ export default function GeoTracking({ siteId, domain }: Props) {
   const [platforms, setPlatforms] = useState<GeoPlatformId[]>([]);
   const [scheduleDays, setScheduleDays] = useState<number | null>(null);
   const [budget, setBudget] = useState("1");
+  const [samples, setSamples] = useState(1);
+  const [facts, setFacts] = useState<FactDraft[]>([]);
   const [newPrompts, setNewPrompts] = useState("");
   const [newTag, setNewTag] = useState("");
   const [confirming, setConfirming] = useState<"full" | "trial" | null>(null);
@@ -186,6 +273,8 @@ export default function GeoTracking({ siteId, domain }: Props) {
       setPlatforms(next.settings?.platforms ?? ["CHATGPT", "GOOGLE_AIO", "PERPLEXITY"]);
       setScheduleDays(next.settings?.scheduleDays ?? null);
       setBudget(String(next.settings?.budgetUsd ?? 1));
+      setSamples(next.settings?.samples ?? 1);
+      setFacts(next.settings?.facts.map(f => ({ ...f })) ?? []);
     }
     if (wasActive.current && !next.active) announceGeoUpdate();
     wasActive.current = !!next.active;
@@ -243,7 +332,8 @@ export default function GeoTracking({ siteId, domain }: Props) {
   const saveSettings = () => act("settings", async () => {
     const settings: TrackingSettings = {
       brands: { own: entityOf(own), competitors: competitors.filter(c => c.name.trim()).map(entityOf) },
-      platforms, scheduleDays, budgetUsd: Number(budget),
+      platforms, scheduleDays, budgetUsd: Number(budget), samples,
+      facts: facts.map(f => ({ label: f.label.trim(), value: f.value.trim() })).filter(f => f.label && f.value),
     };
     apply(await request(`/api/sites/${siteId}/geo/tracking`, { method: "PUT", body: JSON.stringify(settings) }) as TrackingWorkspace, true);
     setNotice(t("Settings saved.", "设置已保存。"));
@@ -308,7 +398,24 @@ export default function GeoTracking({ siteId, domain }: Props) {
   }, [workspace]);
   const running = workspace?.runs.find(r => r.status === "RUNNING");
   const saved = workspace?.settings;
-  const settingsChanged = !!saved && (JSON.stringify([...saved.platforms].sort()) !== JSON.stringify([...platforms].sort()));
+  const settingsChanged = !!saved && (JSON.stringify([...saved.platforms].sort()) !== JSON.stringify([...platforms].sort()) || saved.samples !== samples);
+  /** The change of each platform's mention rate since the previous full run, and whether it is beyond chance. */
+  const trends = useMemo(() => {
+    const out = new Map<string, Map<string, ReturnType<typeof compareRates>>>();
+    const runs = (workspace?.runs ?? []).filter(run => !run.trial && run.summary);
+    runs.forEach((run, index) => {
+      const previous = runs[index + 1];
+      if (!previous?.summary || !run.summary) return;
+      const byPlatform = new Map<string, ReturnType<typeof compareRates>>();
+      for (const [id, v] of Object.entries(run.summary)) {
+        const before = previous.summary[id as GeoPlatformId];
+        if (!v || !before) continue;
+        byPlatform.set(id, compareRates({ rate: before.mentionRate, n: before.prompts ?? before.answers }, { rate: v.mentionRate, n: v.prompts ?? v.answers }));
+      }
+      out.set(run.id, byPlatform);
+    });
+    return out;
+  }, [workspace]);
 
   if (!workspace) {
     return <section className="panel p-5"><h2 className="font-semibold">{t("Prompt tracking", "提示词跟踪")}</h2>
@@ -319,7 +426,7 @@ export default function GeoTracking({ siteId, domain }: Props) {
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h2 className="font-semibold">{t("Prompt tracking", "提示词跟踪")}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{t("Ask each platform the questions your customers ask and see whether its answers name or cite the site. ChatGPT, Gemini, Google AI Overviews, AI Mode, Perplexity and Claude are asked through your DataForSEO account (paid per task); for Copilot, Grok, Meta AI and DeepSeek record what you see in their apps.", "向各平台提出客户会问的问题，看回答是否提及或引用网站。ChatGPT、Gemini、Google AI 概览、AI 模式、Perplexity 和 Claude 通过你的 DataForSEO 账户查询（按任务计费）；Copilot、Grok、Meta AI 和 DeepSeek 请把在其应用中看到的回答手动记下。")}</p>
+        <p className="mt-1 text-sm text-muted-foreground">{t("Ask each platform the questions your customers ask and see whether its answers name or cite the site. ChatGPT, Gemini, Google AI Overviews, AI Mode, Perplexity and Claude are asked through your DataForSEO account (paid per task); for Copilot, Grok, Meta AI, DeepSeek, Doubao, Yuanbao, Qwen, Kimi and ERNIE Bot record what you see in their apps.", "向各平台提出客户会问的问题，看回答是否提及或引用网站。ChatGPT、Gemini、Google AI 概览、AI 模式、Perplexity 和 Claude 通过你的 DataForSEO 账户查询（按任务计费）；Copilot、Grok、Meta AI、DeepSeek、豆包、腾讯元宝、千问、Kimi 和文心一言请把在其应用中看到的回答手动记下。")}</p>
         <p className="mt-1 text-xs text-muted-foreground">{t("Market: {language} · location {location} (change it in the site's research settings).", "市场：{language} · 地区代码 {location}（在网站的调研设置中修改）。", { language: workspace.market.language, location: workspace.market.location })}</p>
       </div>
       <button type="button" className="inline-flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-sm hover:bg-muted" onClick={() => void load(false)}><RefreshCw size={14} />{t("Refresh", "刷新")}</button>
@@ -362,12 +469,27 @@ export default function GeoTracking({ siteId, domain }: Props) {
               <option value="30">{t("Every 30 days", "每 30 天")}</option>
             </select>
           </label>
+          <label className="space-y-1"><span className="block text-xs text-muted-foreground">{t("Answers per prompt", "每个提示词的回答数")}</span>
+            <select className={INPUT} value={samples} onChange={e => setSamples(Number(e.target.value))}>
+              {Array.from({ length: MAX_SAMPLES }, (_, i) => i + 1).map(n => <option key={n} value={n}>{n === 1 ? t("1 (one answer)", "1（一个回答）") : t("{n} (cost × {n})", "{n}（费用 × {n}）", { n })}</option>)}
+            </select>
+          </label>
           <label className="space-y-1"><span className="block text-xs text-muted-foreground">{t("Budget per run (USD)", "单次运行预算（美元）")}</span>
             <input className={`${INPUT} w-28`} type="number" min={0.05} max={100} step={0.05} value={budget} aria-invalid={!budgetValid} onChange={e => setBudget(e.target.value)} />
           </label>
           <button type="button" className="rounded-md bg-primary px-4 py-2 text-sm text-primary-foreground hover:opacity-90 disabled:opacity-50" disabled={busy !== null || !own.name.trim() || !budgetValid} onClick={() => void saveSettings()}>{busy === "settings" ? t("Saving…", "保存中…") : t("Save settings", "保存设置")}</button>
         </div>
         {!budgetValid && <p className="text-xs text-danger">{t("Enter a budget from $0.05 to $100.", "请输入 0.05 到 100 美元之间的预算。")}</p>}
+        <p className="text-xs text-muted-foreground">{t("AI answers vary from one ask to the next. Asking each prompt several times per run shows how often the brand comes up rather than whether it came up once; the cost grows with it.", "AI 的回答每次都可能不同。每次运行把同一提示词多问几遍，看到的是品牌出现的频率，而不是偶然出现一次；费用随之增加。")}</p>
+        <div className="space-y-2">
+          <div className="text-xs text-muted-foreground">{t("Brand fact card: facts answers should get right. Each answer is checked against them for your review. Separate alternatives with |, e.g. founded|成立 and 2015.", "品牌事实卡：回答应当说对的事实。每个回答都会对照它们做初查，供你复核。可用 | 分隔多种写法，例如 founded|成立 与 2015。")}</div>
+          {facts.map((f, i) => <div key={i} className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+            <input className={INPUT} placeholder={t("Fact, e.g. Founded", "事实，例如：成立时间")} maxLength={60} value={f.label} onChange={e => setFacts(facts.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
+            <input className={INPUT} placeholder={t("Correct value, e.g. 2015", "正确内容，例如：2015")} maxLength={300} value={f.value} onChange={e => setFacts(facts.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} />
+            <button type="button" className="rounded p-2 text-muted-foreground hover:text-danger" aria-label={t("Remove", "移除")} onClick={() => setFacts(facts.filter((_, j) => j !== i))}><Trash2 size={14} /></button>
+          </div>)}
+          {facts.length < MAX_FACTS && <button type="button" className="inline-flex items-center gap-1 text-sm text-link" onClick={() => setFacts([...facts, { label: "", value: "" }])}><Plus size={14} />{t("Add a fact", "添加事实")}</button>}
+        </div>
         {scheduleDays !== null && !workspace.scheduler && <p className="text-xs text-warning">{t("Scheduled tasks are turned off on this server (SCHEDULER_ENABLED or SCHEDULE_GEO_TRACKING is false), so only runs started by hand will happen.", "本服务器关闭了定时任务（SCHEDULER_ENABLED 或 SCHEDULE_GEO_TRACKING 为 false），只会执行手动运行。")}</p>}
         {scheduleDays !== null && <p className="text-xs text-muted-foreground">{t("Scheduled runs use the same budget and start within the scheduler's next pass after the interval; a run started by hand resets the interval.", "定期运行使用相同预算，间隔到期后在调度器下一轮启动；手动运行会重新计算间隔。")}</p>}
       </div>
@@ -397,7 +519,8 @@ export default function GeoTracking({ siteId, domain }: Props) {
         <div className="text-sm">
           <strong>{t("{n} tasks", "{n} 个任务", { n: workspace.estimate.tasks })}</strong>
           <span className="text-muted-foreground"> · {t("about {usd}, stops at the budget of {budget}", "约 {usd}，到达预算 {budget} 即停止", { usd: usd(workspace.estimate.usd), budget: usd(saved?.budgetUsd ?? 0) })}</span>
-          {settingsChanged && <div className="text-xs text-warning">{t("Save the settings first: the run uses the saved platforms.", "请先保存设置：运行使用已保存的平台。")}</div>}
+          {(saved?.samples ?? 1) > 1 && <span className="text-muted-foreground"> · {t("{n} answers per prompt", "每个提示词 {n} 个回答", { n: saved?.samples ?? 1 })}</span>}
+          {settingsChanged && <div className="text-xs text-warning">{t("Save the settings first: the run uses the saved platforms and answers per prompt.", "请先保存设置：运行使用已保存的平台和每个提示词的回答数。")}</div>}
           {!workspace.runs.length && workspace.trialEstimate.tasks > 0 && <div className="text-xs text-muted-foreground">{t("First time? Start with a trial run: only the first active prompt on each platform, about {usd}.", "第一次使用？建议先试运行：每个平台只问第一个启用的提示词，约 {usd}。", { usd: usd(workspace.trialEstimate.usd) })}</div>}
         </div>
         {!confirming && <div className="flex flex-wrap gap-2">
@@ -436,6 +559,13 @@ export default function GeoTracking({ siteId, domain }: Props) {
             <div><div className="text-lg font-semibold">{percent(v.shareOfVoice)}</div><div className="text-xs text-muted-foreground">{t("share of voice", "声量份额")}</div></div>
           </div>
           <div className="mt-2 text-xs text-muted-foreground">{t("{n} answers", "{n} 个回答", { n: v.answers })}{v.noAnswer ? " · " + t("{n} without AI answer", "{n} 个无 AI 回答", { n: v.noAnswer }) : ""}{v.failed ? " · " + t("{n} failed", "{n} 个失败", { n: v.failed }) : ""}{v.avgCitationRank !== null ? " · " + t("avg. source #{n}", "平均第 {n} 个来源", { n: v.avgCitationRank.toFixed(1) }) : ""}</div>
+          {v.mentionRange && <div className="mt-1 text-xs text-muted-foreground" title={t("95% range, counting each prompt once", "95% 区间，每个提示词计一次")}>{t("Named: likely {low} to {high}", "提及率大概率在 {low} 至 {high} 之间", { low: percent(v.mentionRange.low), high: percent(v.mentionRange.high) })}</div>}
+          {v.prompts > 0 && v.prompts < SMALL_SAMPLE && <div className="mt-1 text-xs text-warning">{t("Only {n} prompts: treat these rates as rough. Add prompts or answers per prompt for firmer numbers.", "只有 {n} 个提示词：这些比例只能作粗略参考。增加提示词或每个提示词的回答数，数字会更可靠。", { n: v.prompts })}</div>}
+          {(() => {
+            const r: ReviewSummary | undefined = workspace.latest.reviews[id];
+            if (!r?.reviewed) return null;
+            return <div className="mt-1 text-xs text-muted-foreground">{t("Reviewed {n}: {accurate} accurate, {partly} partly, {inaccurate} inaccurate · {positive} positive, {negative} negative", "已复核 {n} 个：准确 {accurate}、部分准确 {partly}、不准确 {inaccurate} · 正面 {positive}、负面 {negative}", { n: r.reviewed, accurate: r.accurate, partly: r.partly, inaccurate: r.inaccurate, positive: r.positive, negative: r.negative })}</div>;
+          })()}
         </div>;
       })}</div>
       <div className="overflow-x-auto rounded-lg border border-border">
@@ -451,7 +581,7 @@ export default function GeoTracking({ siteId, domain }: Props) {
               const m = mark(cell, t);
               return <td key={id} className="px-2 py-1.5 text-center">
                 {cell
-                  ? <button type="button" className="inline-flex size-6 items-center justify-center rounded hover:bg-muted" title={m.title} aria-label={m.title} onClick={() => setOpenAnswer(cell.answerId)}><MarkIcon kind={m.kind} /></button>
+                  ? <button type="button" className="inline-flex h-6 min-w-6 items-center justify-center gap-1 rounded px-1 hover:bg-muted" title={m.title} aria-label={m.title} onClick={() => setOpenAnswer(cell.answerId)}><MarkIcon kind={m.kind} />{cell.samples > 1 && <span className="text-[10px] text-muted-foreground">{cell.namedIn}/{cell.samples}</span>}{cell.review?.accuracy === "INACCURATE" && <AlertTriangle size={11} className="text-warning" aria-hidden />}</button>
                   : <span title={m.title}><MarkIcon kind="NONE" /><span className="sr-only">{m.title}</span></span>}
               </td>;
             })}
@@ -463,6 +593,30 @@ export default function GeoTracking({ siteId, domain }: Props) {
           CITED: t("cited", "被引用"), NAMED: t("named, not cited", "提及未引用"), NOT_NAMED: t("not named", "未提及"), NO_ANSWER: t("no AI answer", "无 AI 回答"), FAILED: t("failed", "失败"), NONE: "",
         }[kind]}</span>)}
       </p>
+    </div>}
+
+    {workspace.gaps.length > 0 && <div className="space-y-2">
+      <h3 className="font-medium">{t("Citation gaps", "引用缺口")} <span className="text-xs font-normal text-muted-foreground">{t("sites the answers cite when they name a competitor and leave your brand out", "回答提到竞品却没提你的品牌时所引用的网站")}</span></h3>
+      <p className="text-xs text-muted-foreground">{t("These are the reviews, lists, forums and media the platforms trust for your topic. Being covered there, listed, reviewed or quoted, is the usual way into such answers.", "这些是各平台在你的主题上信任的评测、榜单、论坛和媒体。在这些网站被收录、评测或引用，通常是进入这类回答的途径。")}</p>
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full min-w-[640px] text-left text-sm">
+          <thead className="bg-muted/50 text-xs text-muted-foreground"><tr>
+            <th className="px-3 py-2 font-medium">{t("Site", "网站")}</th>
+            <th className="px-3 py-2 font-medium">{t("Type", "类型")}</th>
+            <th className="px-3 py-2 font-medium">{t("Gap answers / all citing", "缺口回答 / 全部引用")}</th>
+            <th className="px-3 py-2 font-medium">{t("Competitors named", "提到的竞品")}</th>
+            <th className="px-3 py-2 font-medium">{t("Platforms", "平台")}</th>
+          </tr></thead>
+          <tbody>{workspace.gaps.slice(0, 20).map(gap => <tr key={gap.domain} className="border-t border-border align-top">
+            <td className="px-3 py-1.5"><a href={gap.urls[0] ?? `https://${gap.domain}`} target="_blank" rel="noreferrer noopener" className="text-link">{gap.domain}</a>
+              {gap.promptIds[0] && <div className="text-xs text-muted-foreground">{workspace.prompts.find(p => p.id === gap.promptIds[0])?.text.slice(0, 80)}</div>}</td>
+            <td className="px-3 py-1.5 text-xs">{sourceTypeName(gap.type, t)}</td>
+            <td className="px-3 py-1.5 whitespace-nowrap">{gap.gapAnswers} / {gap.answers}{gap.withBrand > 0 && <div className="text-xs text-muted-foreground">{t("{n} with your brand", "{n} 个含你的品牌", { n: gap.withBrand })}</div>}</td>
+            <td className="px-3 py-1.5 text-xs">{gap.competitors.join(", ")}</td>
+            <td className="px-3 py-1.5 text-xs">{gap.platforms.map(id => platformName(id, locale)).join(", ")}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>
     </div>}
 
     <details className="rounded-lg border border-border p-4">
@@ -506,12 +660,22 @@ export default function GeoTracking({ siteId, domain }: Props) {
             <td className="px-3 py-1.5">{runStatus(run, t)}{runError(run, t) && <div className="text-xs text-muted-foreground">{runError(run, t)}</div>}</td>
             <td className="px-3 py-1.5 whitespace-nowrap">{run.done - run.failed}/{run.planned}{run.failed ? <span className="text-danger"> · {t("{n} failed", "{n} 失败", { n: run.failed })}</span> : null}</td>
             <td className="px-3 py-1.5">{usd(run.costUsd)}</td>
-            <td className="px-3 py-1.5 text-xs">{run.summary ? Object.entries(run.summary).map(([id, v]) => <div key={id}>{platformName(id, locale)}: {percent(v?.mentionRate ?? null)} / {percent(v?.citationRate ?? null)}</div>) : "—"}</td>
+            <td className="px-3 py-1.5 text-xs">{run.summary ? Object.entries(run.summary).map(([id, v]) => {
+              const trend = trends.get(run.id)?.get(id);
+              return <div key={id}>{platformName(id, locale)}: {percent(v?.mentionRate ?? null)} / {percent(v?.citationRate ?? null)}
+                {trend && trend.change !== 0 && <span className={trend.significant ? (trend.change > 0 ? "text-success" : "text-danger") : "text-muted-foreground"}
+                  title={trend.significant ? t("Unlikely to be chance (p = {p})", "不太可能是偶然波动（p = {p}）", { p: trend.p }) : t("Within the range chance alone produces (p = {p})", "仍在随机波动范围内（p = {p}）", { p: trend.p })}>
+                  {" "}{trend.change > 0 ? <ArrowUp size={12} className="inline align-[-2px]" aria-hidden /> : <ArrowDown size={12} className="inline align-[-2px]" aria-hidden />}
+                  <span className="sr-only">{trend.change > 0 ? t("up ", "上升 ") : t("down ", "下降 ")}</span>
+                  {Math.abs(Math.round(trend.change * 100))} {trend.significant ? t("pts", "个百分点") : t("pts, noise", "个百分点，属波动")}
+                </span>}
+              </div>;
+            }) : "—"}</td>
           </tr>)}</tbody>
         </table>
       </div>
     </div>}
 
-    {openAnswer && <AnswerPanel siteId={siteId} answerId={openAnswer} onClose={() => setOpenAnswer(null)} onDeleted={next => apply(next, false)} />}
+    {openAnswer && <AnswerPanel siteId={siteId} answerId={openAnswer} onClose={() => setOpenAnswer(null)} onDeleted={next => apply(next, false)} onChanged={next => apply(next, false)} />}
   </section>;
 }

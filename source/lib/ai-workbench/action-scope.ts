@@ -1,6 +1,6 @@
 import type { Translator } from "@/lib/i18n/shared";
 
-export const actionScopes = ["weekly", "bing", "audit", "performance", "geo", "alerts"] as const;
+export const actionScopes = ["weekly", "bing", "audit", "performance", "geo", "alerts", "rankings"] as const;
 export type ActionScope = (typeof actionScopes)[number];
 
 export function parseActionScope(value: unknown): ActionScope | undefined {
@@ -32,5 +32,6 @@ export function reportTitle(scope: ActionScope, t: Translator) {
     case "performance": return t("Page performance priorities", "网页性能修复清单");
     case "geo": return t("GEO evidence review", "GEO 监测分析");
     case "alerts": return t("Alert follow-up", "提醒处理清单");
+    case "rankings": return t("Ranking change review", "排名变化复盘");
   }
 }

@@ -100,7 +100,7 @@ describe("platform overview", () => {
 
   it("says what is missing rather than guessing", () => {
     const statuses = buildPlatformStatuses(empty);
-    expect(statuses).toHaveLength(10);
+    expect(statuses).toHaveLength(15);
     const grok = statuses.find(s => s.id === "GROK")!;
     expect(grok.access.state).toBe("NA");
     expect(grok.report.state).toBe("NA");

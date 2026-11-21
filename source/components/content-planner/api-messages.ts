@@ -11,6 +11,7 @@ const MESSAGES: Record<string, string> = {
   "Selected articles are no longer in the latest crawl. Reload the inventory.": "所选文章已不在最近抓取中，请重新读取库存。",
   "Selected article is not an eligible site page": "所选文章不是当前站点的可用页面。",
   "Article body is missing. Paste at least 100 characters or run a new crawl.": "缺少文章正文。请粘贴至少 100 字符正文，或重新抓取。",
+  "Select fewer articles or paste shorter text, then start the review again.": "本次复核超过本机生成服务的单次容量。请少选几篇文章或粘贴更短的正文后重新开始。",
   "An article was edited after this review started. Generate a new review to preserve your changes.": "文章在生成后已有手动修改，本次未覆盖。请重新生成复核。",
   "This article was imported after the review started. Generate a new review.": "该文章在生成后已被导入，请重新复核。",
   "A topic with this keyword already exists in the selected pillar": "目标支柱中已有相同关键词，本次未修改。",

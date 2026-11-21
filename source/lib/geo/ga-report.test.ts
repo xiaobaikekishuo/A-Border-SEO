@@ -13,9 +13,10 @@ const ctx = {params:Promise.resolve({siteId:"site"})};
 const input = {start:"2026-10-01",end:"2026-10-28",propertyId:"12345",code:"single-use",expectedUpdatedAt:null};
 const dims = ["date","hostName","sessionSource","landingPage"];
 const success = () => Response.json({access_token:"fixture-only",scope:GA_SCOPE});
-function records(data:string[][],counts:number[]) {
-  return {dimensionHeaders:dims.map(name=>({name})),metricHeaders:[{name:"sessions"}],
-    rowCount:data.length, rows:data.map((cells,i)=>({dimensionValues:cells.map(value=>({value})),metricValues:[{value:String(counts[i])}]}))
+function records(data:string[][],counts:number[],engaged:number[]=counts,keyEvents:(number|string)[]=counts.map(()=>0)) {
+  return {dimensionHeaders:dims.map(name=>({name})),metricHeaders:[{name:"sessions"},{name:"engagedSessions"},{name:"keyEvents"}],
+    rowCount:data.length, rows:data.map((cells,i)=>({dimensionValues:cells.map(value=>({value})),
+      metricValues:[{value:String(counts[i])},{value:String(engaged[i])},{value:String(keyEvents[i])}]}))
   };
 }
 function request(customOrigin=origin, header="XmlHttpRequest") {
@@ -71,8 +72,9 @@ describe("GA4 read-only report",()=>{
     expect(report.dateRanges).toEqual([{startDate:input.start,endDate:input.end}]);
     expect(report.dimensionFilter.andGroup.expressions).toContainEqual({filter:{fieldName:"hostName",stringFilter:{matchType:"EXACT",value:"example.com",caseSensitive:false}}});
     expect(report.dimensionFilter.andGroup.expressions[1].filter.inListFilter.values).toContain("chatgpt.com");
+    expect(report.metrics).toEqual([{name:"sessions"},{name:"engagedSessions"},{name:"keyEvents"}]);
     const saved = calls.save.mock.calls[0][3];
-    expect(saved.rows).toEqual([{day:"2026-10-03",platform:"ChatGPT",path:"/help",count:11}]);
+    expect(saved.rows).toEqual([{day:"2026-10-03",platform:"ChatGPT",path:"/help",count:11,engaged:11,keyEvents:0}]);
     expect(saved.notes.join(" ")).toContain("thresholding"); expect(saved.expectedUpdatedAt).toBeNull();
     expect(JSON.stringify(saved)).not.toMatch(/single-use|fixture|access_token/);
   });
@@ -96,6 +98,20 @@ describe("GA4 read-only report",()=>{
     const bad = records([["20261010","other.example","chatgpt","/"]],[2]);
     expect(()=>summarizeGaReport(bad,"example.com",input.start,input.end,"123")).toThrow("GA_RESPONSE");
     expect(()=>summarizeGaReport({...bad,rowCount:50001},"example.com",input.start,input.end,"123")).toThrow("GA_LIMIT");
+  });
+  it("keeps engaged sessions and key events with each referral row, fractional key events included",()=>{
+    const report = records([
+      ["20261010","example.com","chatgpt.com","/a"],
+      ["20261010","example.com","chat.openai.com","/a"],
+      ["20261010","example.com","perplexity.ai","/b"]],[5,3,4],[3,1,0],["1.5","2",0]);
+    expect(summarizeGaReport(report,"example.com",input.start,input.end,"123").rows).toEqual([
+      {day:"2026-10-10",platform:"ChatGPT",path:"/a",count:8,engaged:4,keyEvents:3.5},
+      {day:"2026-10-10",platform:"Perplexity",path:"/b",count:4,engaged:0,keyEvents:0},
+    ]);
+    // A report without the new metrics is not one this request made.
+    const legacy = {...report, metricHeaders:[{name:"sessions"}], rows:report.rows.map(r=>({...r,metricValues:[r.metricValues[0]]}))};
+    expect(()=>summarizeGaReport(legacy,"example.com",input.start,input.end,"123")).toThrow("GA_RESPONSE");
+    expect(()=>summarizeGaReport(records([["20261010","example.com","chatgpt.com","/a"]],[1],[1],["-1"]),"example.com",input.start,input.end,"123")).toThrow("GA_RESPONSE");
   });
   it("adds up paged results and rejects pages that do not match the reported total",()=>{
     const first = {...records([["20261010","example.com","chatgpt.com","/a"]],[2]), rowCount:2};

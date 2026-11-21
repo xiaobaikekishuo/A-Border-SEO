@@ -31,7 +31,22 @@ type VitalsRow = {
   cls: number | null;
   inp: number | null;
   ttfb: number | null;
+  /** Lab Total Blocking Time (ms). Absent from servers before 1.5.7. */
+  tbt?: number | null;
+  /** Chrome UX Report p75 of real visits: this URL, or the whole origin as a fallback. Absent from servers before 1.5.7. */
+  field?: { source: string; lcp: number | null; inp: number | null; cls: number | null; category: string | null } | null;
 };
+
+/** "2.10s / 180ms / 0.050", with "(origin)" when the page had too few visits of its own; "-" without field data. */
+function fieldVitals(field: VitalsRow["field"]): string {
+  if (!field) return "-";
+  const parts = [
+    field.lcp != null ? `${field.lcp.toFixed(2)}s` : "-",
+    field.inp != null ? `${field.inp.toFixed(0)}ms` : "-",
+    field.cls != null ? field.cls.toFixed(3) : "-",
+  ];
+  return parts.join(" / ") + (field.source === "ORIGIN" ? " (origin)" : "");
+}
 
 type AuditReview = { excluded: number; unverified: number; message: string };
 
@@ -148,7 +163,9 @@ export function formatSiteOverview(site: SiteOverview): string {
     if (v.lcp != null) lines.push(`LCP: ${v.lcp.toFixed(2)}s`);
     if (v.cls != null) lines.push(`CLS: ${v.cls.toFixed(3)}`);
     if (v.inp != null) lines.push(`INP: ${v.inp.toFixed(0)}ms`);
+    if (v.tbt != null) lines.push(`TBT (lab): ${v.tbt.toFixed(0)}ms`);
     if (v.ttfb != null) lines.push(`TTFB: ${v.ttfb.toFixed(2)}s`);
+    if (v.field) lines.push(`Field p75 (LCP / INP / CLS): ${fieldVitals(v.field)}`);
   }
 
   return lines.join("\n");
@@ -261,15 +278,18 @@ export function formatCrawlIssues(result: {
 export function formatVitals(vitals: VitalsRow[]): string {
   if (vitals.length === 0) return "No vitals reports found.";
 
-  const headers = ["Date", "Device", "Perf", "LCP", "CLS", "INP", "TTFB"];
+  // Lighthouse loads the page without interacting, so it has no INP; TBT is
+  // its stand-in. INP comes from the field data (real Chrome visits).
+  const headers = ["Date", "Device", "Perf", "LCP (lab)", "CLS (lab)", "TBT (lab)", "TTFB", "Field p75 LCP / INP / CLS"];
   const rows = vitals.map((v) => [
     new Date(v.date).toISOString().slice(0, 10),
     v.device,
     v.perfScore != null ? String(v.perfScore) : "-",
     v.lcp != null ? `${v.lcp.toFixed(2)}s` : "-",
     v.cls != null ? v.cls.toFixed(3) : "-",
-    v.inp != null ? `${v.inp.toFixed(0)}ms` : "-",
+    v.tbt != null ? `${v.tbt.toFixed(0)}ms` : "-",
     v.ttfb != null ? `${v.ttfb.toFixed(2)}s` : "-",
+    fieldVitals(v.field),
   ]);
 
   return `${vitals.length} vitals reports:\n\n` + formatTable(headers, rows);
@@ -446,5 +466,107 @@ export function formatAiVisibility(r: AiVisibility): string {
     `Prompt tracking: ${r.tracking.activePrompts} active prompts; last run ${run ? `${String(run.startedAt).slice(0, 10)} ${run.status}, ${run.done - run.failed}/${run.planned} tasks, $${run.costUsd.toFixed(3)}${run.errorCode ? ` (${run.errorCode})` : ""}` : "none"}`,
     "",
     formatTable(["Platform", "Access", "Page directives", "Index", "AI report", "Answers", "Traffic"], rows),
+  ].join("\n");
+}
+
+type Rankings = {
+  site: { domain: string };
+  market: { language: string; location: number };
+  settings: { device: string; depth: number; aiOverview: boolean; scheduleDays: number | null };
+  summary: { tracked: number; checked: number; top3: number; top10: number; ranked: number; notRanked: number; up: number; down: number; aiOverview: number; aiCited: number };
+  lastRun: { status: string; startedAt: string; finishedAt: string | null; checks: number; done: number; failed: number; costUsd: number; errorCode: string | null } | null;
+  keywords: {
+    keyword: string;
+    position: number | null;
+    change: number | null;
+    movement: string | null;
+    url: string | null;
+    urlChanged: boolean;
+    aiOverview: boolean | null;
+    aiCited: boolean | null;
+    checkedAt: string | null;
+    lastCheckFailed: boolean;
+    gscPosition: number | null;
+  }[];
+};
+
+const clip = (text: string, max: number) => (text.length > max ? text.slice(0, max - 3) + "..." : text);
+
+/** One row per tracked keyword: measured position, change, Search Console's average, ranking page, AI Overview. */
+export function formatRankings(r: Rankings): string {
+  if (r.keywords.length === 0) {
+    return `No keywords are tracked for ${r.site.domain}. Mark saved keywords for tracking on the Rank tracking page of A-Border SEO.`;
+  }
+  const depth = r.settings.depth;
+  const move = (k: Rankings["keywords"][number]) => {
+    switch (k.movement) {
+      case "UP": return `+${k.change}`;
+      case "DOWN": return String(k.change);
+      case "SAME": return "0";
+      case "ENTERED": return "new";
+      case "LEFT": return "out";
+      default: return "-";
+    }
+  };
+  const ai = (k: Rankings["keywords"][number]) =>
+    k.aiOverview === null ? "-" : !k.aiOverview ? "none" : k.aiCited === true ? "cites site" : k.aiCited === false ? "not citing site" : "shown";
+  const path = (url: string) => clip(url.replace(/^https?:\/\/[^/]+/, "") || "/", 40);
+  const rows = r.keywords.map((k) => [
+    clip(k.keyword, 45),
+    !k.checkedAt ? "not checked" : k.position === null ? `>${depth}` : String(k.position),
+    move(k),
+    k.gscPosition === null ? "-" : k.gscPosition.toFixed(1),
+    k.url ? path(k.url) + (k.urlChanged ? " (changed)" : "") : "-",
+    ai(k),
+    (k.checkedAt ? k.checkedAt.slice(0, 10) : "-") + (k.lastCheckFailed ? " (last check failed)" : ""),
+  ]);
+  const s = r.summary;
+  const run = r.lastRun;
+  return [
+    `Rank tracking for ${r.site.domain}: Google ${r.settings.device}, location ${r.market.location}, language ${r.market.language}, first ${depth} results` +
+      (r.settings.scheduleDays ? `, checked every ${r.settings.scheduleDays} day(s)` : ", checked by hand"),
+    `${s.tracked} tracked, ${s.checked} checked: ${s.top3} in the top 3, ${s.top10} in the top 10, ${s.notRanked} not in the first ${depth}; ${s.up} up and ${s.down} down since the previous check.`,
+    ...(s.aiOverview ? [`Google showed an AI Overview for ${s.aiOverview} keyword(s); it cited the site for ${s.aiCited}.`] : []),
+    `Last run: ${run ? `${String(run.startedAt).slice(0, 10)} ${run.status}, ${run.done}/${run.checks} checks, $${run.costUsd.toFixed(4)}${run.errorCode ? ` (${run.errorCode})` : ""}` : "none"}`,
+    `Position: measured organic rank in that market (>${depth}: not in the results read). GSC: Search Console average position over the last 28 days, all countries and devices.`,
+    "",
+    formatTable(["Keyword", "Position", "Change", "GSC", "Ranking page", "AI Overview", "Checked"], rows),
+  ].join("\n");
+}
+
+type CitationGaps = {
+  site: { domain: string };
+  since: string;
+  brand: string | null;
+  competitors: string[];
+  activePrompts: number;
+  gaps: { domain: string; type: string; gapAnswers: number; answers: number; withBrand: number; competitors: string[]; platforms: string[]; prompts: string[]; urls: string[] }[];
+};
+
+/** The sites AI answers cite next to competitors and not the brand, with the prompts and cited pages. */
+export function formatCitationGaps(r: CitationGaps): string {
+  if (!r.brand) return `Prompt tracking is not set up for ${r.site.domain}: there are no AI answers to read citation gaps from.`;
+  if (r.gaps.length === 0) {
+    return `No citation gaps for ${r.site.domain} in the answers since ${String(r.since).slice(0, 10)}: no third-party site was cited in an answer that named a competitor and left ${r.brand} out.`;
+  }
+  const rows = r.gaps.map((g) => [
+    g.domain,
+    g.type.toLowerCase().replace("_", "/"),
+    `${g.gapAnswers}/${g.answers}`,
+    String(g.withBrand),
+    clip(g.competitors.join(", "), 40),
+    g.platforms.join(", "),
+  ]);
+  const details = r.gaps.slice(0, 10).map((g) =>
+    [`- ${g.domain}`, ...g.prompts.slice(0, 3).map((p) => `  prompt: ${clip(p, 100)}`), ...g.urls.slice(0, 2).map((u) => `  cited: ${u}`)].join("\n")
+  );
+  return [
+    `Citation gaps for ${r.site.domain} (brand ${r.brand}; competitors ${r.competitors.join(", ") || "none set"}), latest answers since ${String(r.since).slice(0, 10)}, ${r.activePrompts} active prompts.`,
+    `Gap: answers citing the site that named a competitor and left the brand out, of all answers citing it. With brand: answers citing it that did name the brand.`,
+    "",
+    formatTable(["Cited site", "Type", "Gap", "With brand", "Competitors named", "Platforms"], rows),
+    "",
+    "Prompts and cited pages:",
+    ...details,
   ].join("\n");
 }

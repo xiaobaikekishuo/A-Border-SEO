@@ -155,15 +155,21 @@ function ImportReport({ siteId, domain, kind, snapshot, refresh }: SiteProps & {
   </details>;
 }
 
+/** Whether GA4 rows carry engaged sessions and key events (reports read from this release on, or exports with those columns). */
+const hasEngagement = (rows: readonly GeoRow[]) => rows.some(row => row.engaged !== undefined || row.keyEvents !== undefined);
+
 function RowsTable({ rows, kind, caption }: { rows: GeoRow[]; kind: GeoKind; caption: string }) {
   const { t, locale } = useI18n();
   const isGa = kind === "GA4";
+  const engagement = isGa && hasEngagement(rows);
   return <div className={s.tableWrap}><table>
     <caption>{caption}</caption><thead><tr><th>{t("Date", "日期")}</th><th>{t("Platform / agent", "平台／爬虫")}</th>
       <th>{isGa ? t("Landing page", "着陆页") : t("Requested path", "请求路径")}</th>
       <th>{isGa ? t("Sessions", "会话数") : t("Requests", "请求数")}</th>
+      {engagement && <><th>{t("Engaged sessions", "互动会话数")}</th><th>{t("Key events", "关键事件")}</th></>}
     </tr></thead><tbody>{rows.map(row => <tr key={JSON.stringify([row.day,row.platform,row.path])}>
-      <td>{row.day}</td><td>{row.platform}</td><td><code>{row.path}</code></td><td>{row.count.toLocaleString(locale)}</td></tr>)}</tbody>
+      <td>{row.day}</td><td>{row.platform}</td><td><code>{row.path}</code></td><td>{row.count.toLocaleString(locale)}</td>
+      {engagement && <><td>{row.engaged?.toLocaleString(locale) ?? "–"}</td><td>{row.keyEvents?.toLocaleString(locale) ?? "–"}</td></>}</tr>)}</tbody>
   </table></div>;
 }
 
@@ -187,15 +193,25 @@ function DailyBars({ rows }: { rows: GeoRow[] }) {
 
 function PlatformTotals({ rows, kind }: {rows: GeoRow[]; kind: GeoKind}) {
   const { t, locale } = useI18n();
+  const engagement = kind === "GA4" && hasEngagement(rows);
   const totals = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const row of rows) counts.set(row.platform, (counts.get(row.platform) ?? 0) + row.count);
-    return [...counts.entries()].sort(([a, n], [b, m]) => m - n || a.localeCompare(b));
+    const counts = new Map<string, { count: number; engaged: number; keyEvents: number }>();
+    for (const row of rows) {
+      const total = counts.get(row.platform) ?? { count: 0, engaged: 0, keyEvents: 0 };
+      total.count += row.count;
+      total.engaged += row.engaged ?? 0;
+      total.keyEvents += row.keyEvents ?? 0;
+      counts.set(row.platform, total);
+    }
+    return [...counts.entries()].sort(([a, n], [b, m]) => m.count - n.count || a.localeCompare(b));
   }, [rows]);
   if (!totals.length) return null;
   return <div className={s.breakdown}>
     <h4>{kind === "GA4" ? t("Sessions by platform", "各平台引荐会话") : t("Requests by crawler", "各爬虫请求数")}</h4>
-    <dl>{totals.map(([platform, count]) => <div key={platform}><dt>{platform}</dt><dd>{count.toLocaleString(locale)}</dd></div>)}</dl>
+    <dl>{totals.map(([platform, total]) => <div key={platform}><dt>{platform}</dt><dd>{total.count.toLocaleString(locale)}
+      {engagement && <span title={t("Engaged sessions · engagement rate · key events", "互动会话 · 互动率 · 关键事件")}>
+        {" · "}{total.engaged.toLocaleString(locale)} · {total.count ? Math.round(100 * total.engaged / total.count) : 0}% · {(Math.round(total.keyEvents * 100) / 100).toLocaleString(locale)}
+      </span>}</dd></div>)}</dl>
   </div>;
 }
 
@@ -219,6 +235,9 @@ function Measurements({ snapshot, kind }: { snapshot: GeoSnapshot; kind: GeoKind
     (end && snapshot.start && end < snapshot.start) || (start && snapshot.end && start > snapshot.end)
   );
   const total = filtered.reduce((sum, row) => sum + row.count, 0);
+  const engagement = isGa && hasEngagement(filtered);
+  const engagedTotal = filtered.reduce((sum, row) => sum + (row.engaged ?? 0), 0);
+  const keyEventTotal = Math.round(filtered.reduce((sum, row) => sum + (row.keyEvents ?? 0), 0) * 100) / 100;
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const visiblePage = Math.min(page, pageCount - 1);
 
@@ -241,6 +260,10 @@ function Measurements({ snapshot, kind }: { snapshot: GeoSnapshot; kind: GeoKind
       <div className={s.metrics}><div><span>{isGa ? t("Matched referral sessions", "匹配的引荐会话") : t("Matched crawler requests", "匹配的爬虫请求")}</span><b>{total.toLocaleString(locale)}</b></div>
         <div><span>{isGa ? t("Observed platforms", "已观察平台") : t("Declared crawlers", "日志声明的爬虫")}</span><b>{new Set(filtered.map(row => row.platform)).size.toLocaleString(locale)}</b></div>
         <div><span>{t("Page paths", "页面路径数")}</span><b>{new Set(filtered.map(row => row.path)).size.toLocaleString(locale)}</b></div>
+        {engagement && <>
+          <div><span>{t("Engaged sessions", "互动会话数")}</span><b>{engagedTotal.toLocaleString(locale)}{total ? ` (${Math.round(100 * engagedTotal / total)}%)` : ""}</b></div>
+          <div><span>{t("Key events", "关键事件")}</span><b>{keyEventTotal.toLocaleString(locale)}</b></div>
+        </>}
       </div>
       {filtered.length > 0 && <div className={s.summaryGrid}><DailyBars rows={filtered}/><PlatformTotals rows={filtered} kind={kind}/></div>}
       {filtered.length ? <>
@@ -250,6 +273,7 @@ function Measurements({ snapshot, kind }: { snapshot: GeoSnapshot; kind: GeoKind
       </> : <p className={s.note}>{t("No matching records in this report for the selected filters.", "当前报表中没有符合筛选条件的记录。")}</p>}
     </>}
     <p className={s.note}>{isGa ? t("Session dates follow the GA4 property timezone. Only sessions with an identifiable AI source are counted.", "日期使用 GA4 媒体资源时区。这里统计能识别 AI 来源的会话。") : t("Dates use UTC. Counts reflect request lines and the User-Agent recorded in the imported log.", "日期使用 UTC，计数依据导入日志里的请求行和 User-Agent。")}</p>
+    {isGa && !engagement && filtered.length > 0 && <p className={s.note}>{t("This snapshot has sessions only. Read the report from GA4 again, or export with the Engaged sessions and Key events columns, to see whether AI visitors engage and convert.", "此快照只有会话数。重新从 GA4 读取报表，或导出时带上“互动会话数”和“关键事件”列，即可查看 AI 访客是否互动和转化。")}</p>}
     <details className={s.notes}><summary>{t("Source notes", "数据来源说明")}</summary>
       <p>{t("{processed} source rows read · {skipped} rows skipped", "共读取 {processed} 条来源记录，跳过 {skipped} 条。", {processed:snapshot.processed, skipped:snapshot.skipped})}</p>
       {snapshot.notes.length > 0 && <ul>{snapshot.notes.map((note, i) => <li key={i}>{note}</li>)}</ul>}

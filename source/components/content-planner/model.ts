@@ -1,9 +1,12 @@
 import type { UpdateOutcome } from "@/lib/content-planner/update-outcome";
 import type { OptimizationEvidence } from "@/lib/content-planner/optimization-evidence";
 import type { ArticleReview } from "@/lib/content-planner/article-review-schema";
+import type { ReviewSignals } from "@/lib/content-planner/review-quality";
 import { plannerApiError } from "./api-messages";
 import { createTranslator, type Translator } from "@/lib/i18n/shared";
 import type { FunnelCounts } from "@/lib/content-planner/funnel";
+/** Window event a panel beside the planner sends after adding topics to a site's plan; detail: { siteId }. */
+export const CONTENT_PLAN_CHANGED = "aborder:content-plan-changed";
 export type Funnel = "TOFU" | "MOFU" | "BOFU";
 export type ContentStatus = "PLANNED" | "BRIEF_READY" | "WRITING" | "REVIEW" | "PUBLISHED";
 export type Source = "MANUAL" | "AI" | "EXAMPLE";
@@ -32,7 +35,7 @@ export type Plan = { pillarSummary: string; topics: PlanTopic[] };
 export type PlanJob = {
   keywordSelection?: import("@/lib/content-planner/keyword-selection").KeywordSelection;
   topicCount?: number; funnelCounts?: FunnelCounts;
-  kind?: string; reviewResult?: ArticleReview | null; reviewPages?: { pageId: string; title: string; url: string; source: string }[];
+  kind?: string; reviewResult?: ArticleReview | null; reviewPages?: { pageId: string; title: string; url: string; source: string; signals?: ReviewSignals | null; excerptShortened?: boolean }[];
   id: string; pillarId: string; status: string; result: Plan | null; error: string | null;
   appliedAt: string | null; createdAt: string; startedAt: string | null; finishedAt: string | null;
 };

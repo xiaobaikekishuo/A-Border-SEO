@@ -178,7 +178,11 @@ export default async function CrawlPage({ params, searchParams }: Props) {
                     </thead>
                     <tbody className="divide-y divide-border-soft">
                       {issues.map((issue) => {
-                        const details = issue.details as { howToFix?: string; kind?: string } | null;
+                        const details = issue.details as { howToFix?: string; kind?: string; count?: unknown; samples?: unknown } | null;
+                        // Mixed content: the first HTTP resources the page loads (lib/crawler/mixed-content.ts).
+                        const samples = issue.type === "MIXED_CONTENT" && details && Array.isArray(details.samples) ? details.samples as { url?: unknown }[] : [];
+                        const insecure = samples.map((sample) => (typeof sample?.url === "string" ? sample.url : "")).filter(Boolean).slice(0, 3);
+                        const moreInsecure = insecure.length && details && typeof details.count === "number" ? details.count - insecure.length : 0;
                         return (
                           <tr key={issue.id} className="align-top">
                             <td className="px-4 py-3">
@@ -186,6 +190,12 @@ export default async function CrawlPage({ params, searchParams }: Props) {
                             </td>
                             <td className="px-4 py-3">
                               <p className="text-text-strong">{localizedObservation(issue.message, locale)}</p>
+                              {insecure.length > 0 && (
+                                <p className="mt-1 break-all font-data text-[12px] leading-[18px] text-muted-foreground">
+                                  {t("Loaded over HTTP: ", "通过 HTTP 加载：")}{insecure.join(" · ")}
+                                  {moreInsecure > 0 && t(" (+{n} more)", "（另有 {n} 项）", { n: moreInsecure })}
+                                </p>
+                              )}
                               {details?.howToFix && (
                                 <p className="mt-1 text-[12px] leading-[18px] text-muted-foreground">
                                   <span className="font-medium text-text">{t("Fix: ", "修复建议：")}</span>

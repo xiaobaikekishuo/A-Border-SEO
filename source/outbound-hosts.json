@@ -2,7 +2,7 @@
   "$comment": "Every external host in the app's code (lib/, app/, packages/, components/ and root files). \"requests\" are the hosts the app contacts and must match the README section \"数据与外部连接\" (see DEVELOPMENT.md, Outbound connections). \"notRequested\" hosts only appear as links or plain strings, and only in the files listed. lib/outbound-hosts.test.ts fails on anything else.",
   "requests": {
     "aborder.tuitehao.shop": "Hosted desktop workspace, device-bound sessions, business API and local content-worker coordination",
-    "api.manus.ai": "Optional Manus key check, user-confirmed keyword research and reading its status and results",
+    "api.manus.ai": "Optional Manus key check, user-confirmed research tasks (keywords, GEO citation sources, link prospects) and reading their status and results",
     "private.manuscdn.com": "Signed workbook and Markdown report downloads for an existing Manus task",
     "private-us-east-1.manuscdn.com": "Regional signed workbook and Markdown report downloads for an existing Manus task",
     "auth.openai.com": "Optional local ChatGPT app OAuth, JWKS verification, token renewal and session revocation",
@@ -13,7 +13,8 @@
     "searchconsole.googleapis.com": "Search Console URL Inspection (index status)",
     "analyticsdata.googleapis.com": "Manually requested GA4 read-only AI session reports",
     "ssl.bing.com": "Bing Webmaster Tools API, only with the user's own key",
-    "api.dataforseo.com": "DataForSEO API, only with the user's own key",
+    "api.dataforseo.com": "DataForSEO API, only with the user's own key: research queries, prompt tracking and rank checks",
+  "api.indexnow.org": "IndexNow URL submissions the user starts for their own site (passed on to Bing, Yandex and other participating engines)",
     "suggestqueries.google.com": "Google autocomplete keyword suggestions",
     "api.github.com": "GitHub release metadata for desktop updates and the optional browser deployment version check",
     "github.com": "Desktop update feed and versioned release manifest or installer downloads",
@@ -50,9 +51,10 @@
       ]
     },
     "schema.org": {
-      "reason": "JSON-LD vocabulary identifier checked locally; no remote context is fetched",
+      "reason": "JSON-LD vocabulary identifier checked and written locally; no remote context is fetched",
       "files": [
-        "lib/seo/structured-data.ts"
+        "lib/seo/structured-data.ts",
+        "lib/ai-workbench/tools/schema-markup.ts"
       ]
     },
     "chatgpt.com": {

@@ -57,7 +57,7 @@ function Get-SeoDatabase {
     return [pscustomobject]@{ User = $user; Name = $name; Volume = $volume }
 }
 function Get-SeoImageName {
-    $image = Get-SeoEnvValue 'ABORDER_SEO_IMAGE' 'a-border-seo:1.5.6'
+    $image = Get-SeoEnvValue 'ABORDER_SEO_IMAGE' 'a-border-seo:1.9.2'
     if ($image -notmatch '^[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}$') { throw '.env 中的 ABORDER_SEO_IMAGE 不是有效的镜像名。' }
     return $image
 }

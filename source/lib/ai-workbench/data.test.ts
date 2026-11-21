@@ -195,12 +195,15 @@ describe("local account workbench", () => {
     expect(saved.result).toBeNull(); expect(saved.draftText).toBeNull(); expect(saved.status).toBe("RUNNING");
   });
 });
-describe("all generated links require local evidence", () => {
+describe("generated links outside local evidence are marked, not trusted", () => {
   const context = { allowedInternalLinks: [url] };
   it("accepts evidence URLs and relative markdown forms", () => {
     expect(validateWorkbenchResult({ ...result(), contentMarkdown: "[Guide](/guide) and [Guide](https://workbench.example/guide)" }, "workbench.example", context).title).toBe("A useful guide");
   });
-  it.each(["https://outside.example/steal", "[link](/invented)", "[link](javascript:alert(1))", "[ref]: https://outside.example/steal", '<a href="https://outside.example/steal">link</a>', "<https://outside.example/steal>"])("rejects URL bypass in %s", contentMarkdown => {
-    expect(() => validateWorkbenchResult({ ...result(), contentMarkdown }, "workbench.example", context)).toThrow("verified site URLs");
+  it.each(["https://outside.example/steal", "[link](/invented)", "[link](javascript:alert(1))", "[ref]: https://outside.example/steal", '<a href="https://outside.example/steal">link</a>', "<https://outside.example/steal>"])("replaces and lists the link in %s", contentMarkdown => {
+    const checked = validateWorkbenchResult({ ...result(), contentMarkdown }, "workbench.example", context);
+    expect(checked.contentMarkdown).not.toMatch(/outside\.example\/steal|\(\/invented\)|javascript:/);
+    expect(checked.linkReview).toHaveLength(1);
+    expect(checked.linkReview?.[0]).toMatchObject({ field: "contentMarkdown", action: "REPLACED" });
   });
 });

@@ -27,7 +27,14 @@ export function useResearchControls(siteId: string, hasDataForSEO: boolean, mode
     setSaving(true); setError("");
     try {
       const res = await fetch(`/api/sites/${siteId}/research-settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(draft) });
-      if (!res.ok) throw new Error("save");
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { code?: string };
+        if (body.code === "MARKET_UNSUPPORTED") {
+          setError(zh ? "你的 DataForSEO 账户不提供这个国家和语言的组合，请换一种语言或地区。" : "Your DataForSEO account does not offer this country and language pair. Pick another language or country.");
+          return;
+        }
+        throw new Error("save");
+      }
       setMarket(await res.json());
     } catch { setError(zh ? "保存失败，请重试。" : "Could not save. Please retry."); }
     finally { setSaving(false); }

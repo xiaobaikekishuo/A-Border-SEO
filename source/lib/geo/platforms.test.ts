@@ -4,9 +4,9 @@ import { REFERRAL_PLATFORMS } from "./import";
 import { GEO_PLATFORM_IDS, GEO_PLATFORMS, geoPlatform, isGeoPlatformId, probeCrawlers, TRACKED_PLATFORMS } from "./platforms";
 
 describe("GEO platform registry", () => {
-  it("lists the ten platforms once each, in the declared order", () => {
+  it("lists the fifteen platforms once each, in the declared order", () => {
     expect(GEO_PLATFORMS.map(p => p.id)).toEqual([...GEO_PLATFORM_IDS]);
-    expect(new Set(GEO_PLATFORM_IDS).size).toBe(10);
+    expect(new Set(GEO_PLATFORM_IDS).size).toBe(15);
     expect(isGeoPlatformId("CHATGPT")).toBe(true);
     expect(isGeoPlatformId("chatgpt")).toBe(false);
     expect(geoPlatform("COPILOT")?.index).toBe("BING");
@@ -32,7 +32,14 @@ describe("GEO platform registry", () => {
 
   it("asks through DataForSEO exactly the platforms it can answer for", () => {
     expect([...TRACKED_PLATFORMS].sort()).toEqual(["CHATGPT", "CLAUDE", "GEMINI", "GOOGLE_AIO", "GOOGLE_AI_MODE", "PERPLEXITY"]);
-    for (const id of ["COPILOT", "GROK", "META_AI", "DEEPSEEK"] as const) expect(geoPlatform(id)?.answers.kind).toBe("MANUAL");
+    for (const id of ["COPILOT", "GROK", "META_AI", "DEEPSEEK", "DOUBAO", "YUANBAO", "QWEN", "KIMI", "ERNIE"] as const) expect(geoPlatform(id)?.answers.kind).toBe("MANUAL");
+  });
+
+  it("records the assistants used in China by hand, counting their GA4 referrals", () => {
+    const china = ["DOUBAO", "YUANBAO", "QWEN", "KIMI", "ERNIE"] as const;
+    expect(china.map(id => geoPlatform(id)?.referrers)).toEqual([["Doubao"], ["Yuanbao"], ["Qwen"], ["Kimi"], ["ERNIE Bot"]]);
+    // No documented answer crawlers: the access check does not imitate guesses.
+    for (const id of china) expect(geoPlatform(id)?.crawlers).toEqual([]);
   });
 
   it("probes each AI crawler once and never imitates the search engine crawlers", () => {

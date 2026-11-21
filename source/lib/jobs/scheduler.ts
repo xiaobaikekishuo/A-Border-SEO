@@ -1,7 +1,7 @@
 import { createHash } from "crypto";
 import type { PrismaClient } from "@prisma/client";
 import { DAY, scheduleConfig, type ScheduleConfig } from "./config";
-import { BING_SYNC_JOB, CRAWL_JOB, GEO_VISIBILITY_JOB, GSC_SYNC_JOB, jobTypes, VITALS_JOB } from "./handlers";
+import { BING_SYNC_JOB, CRAWL_JOB, GEO_VISIBILITY_JOB, GSC_SYNC_JOB, jobTypes, RANK_CHECK_JOB, VITALS_JOB } from "./handlers";
 import { DEFAULT_CRAWL_PAGES } from "./policy";
 import { enqueueJob } from "./queue";
 import { desktopMaintenanceActive } from "@/lib/desktop/maintenance";
@@ -90,8 +90,12 @@ type UserIntervals = Map<string, { crawlScheduleDays: number | null; vitalsSched
 /**
  * bingKeyUsers / dataForSeoUsers: users with that key saved. geoTracking: per
  * site, the interval in days of its scheduled prompt tracking runs.
+ * rankTracking: the same for rank checks, for sites with tracked keywords.
  */
-type PassContext = { bingKeyUsers: Set<string>; dataForSeoUsers: Set<string>; userIntervals: UserIntervals; geoTracking: Map<string, number> };
+type PassContext = {
+  bingKeyUsers: Set<string>; dataForSeoUsers: Set<string>; userIntervals: UserIntervals; geoTracking: Map<string, number>;
+  rankTracking: Map<string, number>;
+};
 
 type Schedule = {
   type: string;
@@ -218,6 +222,14 @@ function builtInSchedules(config: ScheduleConfig): Schedule[] {
       spreadFirst: false,
       applies: (s, ctx) => ctx.geoTracking.has(s.id) && ctx.dataForSeoUsers.has(s.userId),
       siteIntervalMs: (s, ctx) => (ctx.geoTracking.get(s.id) ?? 0) * DAY,
+    },
+    {
+      // Paid, like prompt tracking: sites whose owner chose an interval in rank tracking and tracks keywords.
+      type: RANK_CHECK_JOB,
+      intervalMs: config.rankTracking ? DAY : 0,
+      spreadFirst: false,
+      applies: (s, ctx) => ctx.rankTracking.has(s.id) && ctx.dataForSeoUsers.has(s.userId),
+      siteIntervalMs: (s, ctx) => (ctx.rankTracking.get(s.id) ?? 0) * DAY,
     },
   ];
 }
@@ -360,6 +372,19 @@ async function scheduleSites(
   const geoTracking = new Map<string, number>(
     trackingRows.filter((t) => t.scheduleDays !== null && (t.platforms?.length ?? 0) > 0).map((t) => [t.siteId, t.scheduleDays as number])
   );
+  const rankTracking = new Map<string, number>();
+  if (config.rankTracking) {
+    const rows: { siteId: string; scheduleDays: number | null }[] = await db.rankTracking.findMany({
+      where: { scheduleDays: { not: null } },
+      select: { siteId: true, scheduleDays: true },
+    });
+    const tracked = rows.length
+      ? new Set(
+          (await db.savedKeyword.groupBy({ by: ["siteId"], where: { tracked: true, siteId: { in: rows.map((r) => r.siteId) } } })).map((r) => r.siteId)
+        )
+      : new Set<string>();
+    for (const row of rows) if (row.scheduleDays !== null && tracked.has(row.siteId)) rankTracking.set(row.siteId, row.scheduleDays);
+  }
   const userIntervals: UserIntervals = new Map(
     (
       await db.userSettings.findMany({
@@ -373,7 +398,7 @@ async function scheduleSites(
     // Off on this server: no user setting turns it back on.
     if ((schedule.intervalMs <= 0 && !schedule.isDue) || !allowed.has(schedule.type)) continue;
     const firstSeenAt = await firstSeen(db, schedule.type, now);
-    const due = await dueSites(db, schedule, sites, { now, firstSeenAt, bingKeyUsers, dataForSeoUsers, userIntervals, geoTracking });
+    const due = await dueSites(db, schedule, sites, { now, firstSeenAt, bingKeyUsers, dataForSeoUsers, userIntervals, geoTracking, rankTracking });
     for (const site of due) {
       try {
         if (!await hostedJobAllows(db, { siteId: site.id, type: schedule.type })) continue;

@@ -4,6 +4,8 @@ const { auth, db, countVisibleIssues, getNoindexWarning, getCrawlActivity, getAl
   auth: vi.fn(),
   db: {
     site: { findUnique: vi.fn() },
+    keyword: { findFirst: vi.fn() },
+    page: { findFirst: vi.fn() },
     crawl: { findFirst: vi.fn() },
     auditPage: { count: vi.fn() },
     vitalsReport: { findFirst: vi.fn() },
@@ -29,7 +31,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 const { default: SiteOverviewPage } = await import("./page");
-const site = { userId: "owner", domain: "example.test", gscProperty: "sc-domain:example.test", gscSyncCoverage: [], _count: { keywords: 4, pages: 6 } };
+const site = { userId: "owner", domain: "example.test", gscProperty: "sc-domain:example.test", gscSyncCoverage: [] };
 const crawl = { id: "crawl", healthScore: 90, healthScoreVersion: 1, finishedAt: new Date("2026-11-01T00:00:00Z") };
 const renderPage = () => SiteOverviewPage({ params: Promise.resolve({ siteId: "site" }) });
 function deferred<T>() {
@@ -42,6 +44,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   auth.mockResolvedValue({ user: { id: "owner" } });
   db.site.findUnique.mockResolvedValue(site);
+  db.keyword.findFirst.mockResolvedValue({ id: "keyword" });
+  db.page.findFirst.mockResolvedValue({ id: "page" });
   db.crawl.findFirst.mockResolvedValue(crawl);
   db.auditPage.count.mockResolvedValue(20);
   db.vitalsReport.findFirst.mockResolvedValue(null);
@@ -69,6 +73,7 @@ describe("overview read scheduling", () => {
     expect(db.crawl.findFirst).not.toHaveBeenCalled();
     expect(db.vitalsReport.findFirst).not.toHaveBeenCalled();
     expect(getAllOpportunities).not.toHaveBeenCalled();
+    expect(db.keyword.findFirst).not.toHaveBeenCalled();
 
     ownership.resolve(site);
     await vi.waitFor(() => expect(db.crawl.findFirst).toHaveBeenCalledOnce());
@@ -95,10 +100,19 @@ describe("overview read scheduling", () => {
     expect(db.vitalsReport.findFirst).not.toHaveBeenCalled();
     expect(getAllOpportunities).not.toHaveBeenCalled();
     expect(getCrawlActivity).not.toHaveBeenCalled();
+    expect(db.keyword.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("asks for one stored row instead of counting them all", async () => {
+    await expect(renderPage()).resolves.toBeTruthy();
+    expect(db.keyword.findFirst).toHaveBeenCalledWith({ where: { siteId: "site" }, select: { id: true } });
+    expect(db.page.findFirst).toHaveBeenCalledWith({ where: { siteId: "site" }, select: { id: true } });
+    expect(db.site.findUnique.mock.calls[0][0].select).not.toHaveProperty("_count");
   });
 
   it("skips unavailable history but still checks a pending crawl", async () => {
-    db.site.findUnique.mockResolvedValue({ ...site, _count: { keywords: 0, pages: 0 } });
+    db.keyword.findFirst.mockResolvedValue(null);
+    db.page.findFirst.mockResolvedValue(null);
     db.crawl.findFirst.mockResolvedValue(null);
     await expect(renderPage()).resolves.toBeTruthy();
     expect(getAllOpportunities).not.toHaveBeenCalled();

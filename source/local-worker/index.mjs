@@ -12,9 +12,10 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
-  API_TIMEOUT_MS, HEARTBEAT_MS, LIMITS, POLL_MS, START_CODES, childEnv, execArgs, failureFromExit, generateToken, loginArgs,
-  parseConfig, promptText, safeCode, schemaText, signInArgs, summarizeEvents, tokenFrom, validateClaim, workerHeaders,
+  API_TIMEOUT_MS, CAPABILITIES, HEARTBEAT_MS, LIMITS, LIMITS_EVERY_MS, LIMITS_RETRY_MS, POLL_MS, START_CODES, childEnv, execArgs, failureFromExit,
+  generateToken, loginArgs, parseConfig, promptText, safeCode, schemaText, signInArgs, summarizeEvents, tokenFrom, validateClaim, workerHeaders,
 } from "./lib.mjs";
+import { readCodexStatus } from "./app-server.mjs";
 
 const HELP = `A-Border SEO 本地 Codex worker
 
@@ -171,6 +172,26 @@ async function api(config, token, body, { path = "/api/local-content-worker", ti
   return { status: response.status, ok: response.ok, data };
 }
 
+/** This Codex account's allowance and models, read through app-server without sending a message. */
+function codexStatus(config, codex) {
+  return readCodexStatus({ spawnProcess: spawn, kill: proc => killTree(proc, config.platform), codex, env: childEnv(process.env, config),
+    cwd: config.runtime, platform: config.platform, signal: stop.signal, onChild: proc => { child = proc; } });
+}
+
+// When the allowance is read next; 0: now. Servers before 1.9.0 do not take readings.
+let limitsDueAt = 0;
+async function reportLimits(config, token, codex) {
+  if (Date.now() < limitsDueAt) return;
+  limitsDueAt = Date.now() + LIMITS_EVERY_MS;
+  const read = await codexStatus(config, codex);
+  if (stop.signal.aborted) return;
+  const body = { action: "limits", workerId, limits: read.limits ?? null, error: read.limits ? null : read.error ?? "read_failed",
+    ...(Array.isArray(read.models) ? { models: read.models } : {}), capabilities: CAPABILITIES };
+  const sent = await api(config, token, body).catch(() => null);
+  if (sent && !sent.ok && [400, 404, 422].includes(sent.status)) limitsDueAt = Date.now() + LIMITS_RETRY_MS;
+  await log(config, read.limits ? "limits_read" : "limits_unavailable", read.limits ? {} : { code: body.error });
+}
+
 async function ensureLogin(config, codex, signal = stop.signal) {
   const result = await runProcess(codex, loginArgs(), {
     env: childEnv(process.env, config), cwd: config.runtime, timeoutMs: 30_000, platform: config.platform, signal,
@@ -194,7 +215,7 @@ async function runCodex(config, codex, job, begin, signal) {
   try {
     await writeFile(join(directory, "schema.json"), schema, { mode: 0o600 });
     if (!await begin()) return null;
-    const run = await runProcess(codex, execArgs(config, directory), {
+    const run = await runProcess(codex, execArgs(config, directory, { model: job.model, reasoning: job.reasoning }), {
       env: childEnv(process.env, config), cwd: directory, input: prompt, timeoutMs: config.timeoutSeconds * 1000, platform: config.platform, signal,
     });
     signal.throwIfAborted();
@@ -287,6 +308,10 @@ async function check(config, token) {
   console.log(version.exitCode === 0 ? `Codex 版本：${version.stdout.trim().slice(0, 80)}` : "Codex 无法运行");
   await ensureLogin(config, codex);
   console.log("Codex 已使用 ChatGPT 登录");
+  const status = await codexStatus(config, codex);
+  const describe = window => window ? `已用 ${window.usedPercent}%${window.resetsAt ? `，${new Date(window.resetsAt * 1000).toLocaleString()} 重置` : ""}` : "无";
+  if (status.limits) console.log(`Codex 额度：短窗口 ${describe(status.limits.primary)}；长窗口 ${describe(status.limits.secondary)}`);
+  else console.log(`无法读取 Codex 额度（${status.error}）：后台任务池不会运行，其他任务不受影响`);
   const beat = await api(config, token, { action: "heartbeat", workerId });
   if (beat.status === 401) throw new Error("worker_token_invalid");
   if (!beat.ok) throw new Error("worker_api_failed");
@@ -352,6 +377,8 @@ async function main() {
           continue;
         }
       }
+      // Background pool work needs a recent reading of the allowance.
+      if (config.mode === "watch") await reportLimits(config, token, codex).catch(() => {});
       const request = { action: "claim", workerId };
       let claimed = await api(config, token, { ...request, ...(managedProtocol ? { protocolVersion: 2 } : {}) });
       if (claimed.ok && !managedProtocol && claimed.data?.managedProtocol === 2) {
@@ -369,6 +396,8 @@ async function main() {
           await log(config, "job_claimed", { jobId: job.jobId, provider: job.provider });
           await processJob(config, token, codex, job, managedProtocol);
           if (config.mode === "once") break;
+          // The task used some of the allowance: read it again before asking for more work.
+          limitsDueAt = 0;
           continue;
         }
         if (config.mode === "once") break;

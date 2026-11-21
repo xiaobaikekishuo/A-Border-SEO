@@ -54,12 +54,20 @@ node local-worker/index.mjs --once   # 处理一个任务后退出
 | `ABORDER_URL` | 后台地址。非本机地址必须用 HTTPS，并设置 `ABORDER_WORKER_ALLOW_REMOTE=1` | `http://localhost:3300` |
 | `ABORDER_CODEX_BIN` | Codex 命令或完整路径。Windows 上请指向 `codex.exe` | `codex`（Windows 会先找 Codex 桌面版自带的 CLI） |
 | `ABORDER_CODEX_HOME` | worker 专用的 Codex 登录目录 | `~/.aborder-seo/codex` |
-| `ABORDER_CODEX_MODEL` | 指定模型 | 跟随 Codex 默认 |
-| `ABORDER_CODEX_REASONING` | 推理强度：minimal、low、medium、high、xhigh | `low` |
+| `ABORDER_CODEX_MODEL` | 指定模型。后台 1.9.0 起可在 Codex 工作台按任务类型选模型，选了就以那里为准 | 跟随 Codex 默认 |
+| `ABORDER_CODEX_REASONING` | 推理强度：minimal、low、medium、high、xhigh。同样可被工作台里按任务类型的设置覆盖 | `low` |
 | `ABORDER_CODEX_TIMEOUT_SECONDS` | 单个任务时限（30–540 秒） | `540` |
 | `ABORDER_CODEX_DISABLE_FEATURES` | 关闭的 Codex 功能，逗号分隔。Codex 升级后如果报“Unknown feature flag”，删掉报错的那一项 | 关闭 shell、应用、插件、浏览器、图像、多代理等全部工具类功能 |
 | `ABORDER_CODEX_EXTRA_ARGS` | 追加给 `codex exec` 的参数，JSON 数组，例如 `["--profile","seo"]` | 无 |
 | `ABORDER_WORKER_RUNTIME` | 锁文件、日志（`worker.log`）和临时任务目录 | `~/.aborder-seo/worker` |
+
+## 读取额度（1.9.0）
+
+worker 每隔 5 分钟、以及每完成一个任务后，用 Codex 自带的 app-server 读取一次 ChatGPT 套餐的用量（`account/rateLimits/read`）和这个账号可用的模型（`model/list`），上报给后台。读取不开对话、不发消息，不消耗额度。后台任务池（Codex 工作台页面）靠这个读数决定什么时候可以用空闲额度跑后台任务；读不到时后台任务不会运行，你手动发起的任务不受影响。
+
+- 只有常驻运行（默认的 `--watch`）时读取；`--once` 不读。
+- `--check` 会顺便显示当前的用量和重置时间。
+- 1.9.0 之前的后台不接受读数，worker 会隔一小时再试，其他工作照常。
 
 ## 安全边界
 
@@ -67,3 +75,4 @@ node local-worker/index.mjs --once   # 处理一个任务后退出
 - 传给 Codex 的环境变量是白名单，`OPENAI_API_KEY` 等密钥不会传过去；登录方式固定为 ChatGPT，不会自动改用 API 计费。
 - 提示词、网页内容和模型输出不写入日志，日志只记录事件、任务编号和错误代码。
 - 同一台电脑上只能运行一个 worker（`worker.lock`）。
+- 读取额度时 app-server 同样使用 worker 专用的 Codex 目录，并关闭 MCP、应用和网页搜索；只发送 `initialize`、`account/rateLimits/read` 和 `model/list` 三个请求，读完即结束进程。后台下发的模型名和推理强度先按格式检查，不合格就忽略，改用上表的设置。

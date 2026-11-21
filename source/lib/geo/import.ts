@@ -145,6 +145,8 @@ const headerAliases = {
   path: ["landing page", "landing page + query string", "landingPagePlusQueryString", "着陆页", "着陆页+查询字符串", "着陆页和查询字符串", "落地页", "落地页+查询字符串"],
   count: ["sessions", "会话数", "会话次数"],
   host: ["host name", "hostname", "主机名", "主机名称"],
+  engaged: ["engaged sessions", "engagedSessions", "互动会话数", "参与会话数"],
+  keyEvents: ["key events", "keyEvents", "关键事件", "关键事件数"],
 };
 const headerKey = (s: string) => s.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
 function columnIndex(header: string[], aliases: string[], required = true): number {
@@ -165,6 +167,15 @@ function parseCsv(text: string, host: string): Parsed[] {
   const sourceCol = columnIndex(header, headerAliases.source);
   const sessionsCol = columnIndex(header, headerAliases.count);
   const hostCol = columnIndex(header, headerAliases.host, false);
+  // Optional: exports with engaged sessions and key events keep them.
+  const engagedCol = columnIndex(header, headerAliases.engaged, false);
+  const keyEventsCol = columnIndex(header, headerAliases.keyEvents, false);
+  const metric = (value: string, decimals: boolean): number | null => {
+    if (!(decimals ? /^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,6})?$/ : /^(?:\d+|\d{1,3}(?:,\d{3})+)$/).test(value)) return null;
+    const n = Number(value.replace(/,/g, ""));
+    if (!Number.isFinite(n) || n > 2147483647) throw new Error("geo_count_limit");
+    return n;
+  };
   return records.map(fields => {
     if (fields.length !== header.length || (hostCol >= 0 && fields[hostCol].toLowerCase() !== host)) return excluded;
     const day = normalizeGeoDay(fields[dayCol]);
@@ -174,7 +185,12 @@ function parseCsv(text: string, host: string): Parsed[] {
     const count = Number(value.replace(/,/g, ""));
     if (!Number.isSafeInteger(count) || count > 2147483647) throw new Error("geo_count_limit");
     const platform = classifyAiSource(fields[sourceCol]);
-    return { row: platform ? { day, platform, path, count } : null, inScope: true };
+    const engaged = engagedCol >= 0 ? metric(fields[engagedCol], false) : null;
+    const keyEvents = keyEventsCol >= 0 ? metric(fields[keyEventsCol], true) : null;
+    const row: GeoRow = { day, platform: platform ?? "", path, count };
+    if (engaged !== null && engaged <= count) row.engaged = engaged;
+    if (keyEvents !== null) row.keyEvents = Math.round(keyEvents * 100) / 100;
+    return { row: platform ? row : null, inScope: true };
   });
 }
 
@@ -259,6 +275,8 @@ export function parseGeoImport(kind: GeoKind, text: string, domain: string): { r
     if (!existing) grouped.set(key, row);
     else {
       existing.count += row.count;
+      if (row.engaged !== undefined || existing.engaged !== undefined) existing.engaged = (existing.engaged ?? 0) + (row.engaged ?? 0);
+      if (row.keyEvents !== undefined || existing.keyEvents !== undefined) existing.keyEvents = Math.round(((existing.keyEvents ?? 0) + (row.keyEvents ?? 0)) * 100) / 100;
       if (existing.count > 2147483647) throw new Error("geo_count_limit");
     }
   }

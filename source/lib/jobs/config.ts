@@ -80,6 +80,10 @@ export type ScheduleConfig = {
   vitalsMs: number;
   /** Scheduled prompt tracking runs, at each site's own interval; SCHEDULE_GEO_TRACKING=false turns them off. */
   geoTracking: boolean;
+  /** Scheduled rank checks, at each site's own interval; SCHEDULE_RANK_TRACKING=false turns them off. */
+  rankTracking: boolean;
+  /** The weekly AI action list of sites that turned it on; SCHEDULE_WEEKLY_AI_REPORT=false turns it off. */
+  weeklyAiReport: boolean;
   retentionMs: number;
 };
 
@@ -91,6 +95,8 @@ export function scheduleConfig(env: Env = process.env): ScheduleConfig {
     crawlMs: nonNegativeInt(env.SCHEDULE_CRAWL_DAYS, 7) * DAY,
     vitalsMs: nonNegativeInt(env.SCHEDULE_VITALS_DAYS, 7) * DAY,
     geoTracking: env.SCHEDULE_GEO_TRACKING?.trim().toLowerCase() !== "false",
+    rankTracking: env.SCHEDULE_RANK_TRACKING?.trim().toLowerCase() !== "false",
+    weeklyAiReport: env.SCHEDULE_WEEKLY_AI_REPORT?.trim().toLowerCase() !== "false",
     retentionMs: positiveInt(env.JOB_RETENTION_DAYS, 30) * DAY,
   };
 }

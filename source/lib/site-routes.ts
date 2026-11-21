@@ -9,6 +9,7 @@ export const ALL_SITES_HREF = "/sites";
 export const SITE_SUB_PAGES = [
   "keywords",
   "saved-keywords",
+  "rankings",
   "pages",
   "bing",
   "crawl",

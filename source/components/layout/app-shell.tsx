@@ -106,15 +106,15 @@ export function AppShell({ email, name, image, version, update, children, sites 
             )}
           </button>
         </div>
-        <LanguageSwitcher compact={collapsed} />
         <SiteSwitcher sites={sites} collapsed={collapsed} />
       </div>
 
       <SidebarNav sites={sites} collapsed={collapsed} />
 
       <div className="mt-auto flex flex-col gap-4 pt-5">
+        <LanguageSwitcher compact={collapsed} />
         {!collapsed && (
-          <div className="flex flex-col gap-1.5 border-t border-sidebar-border px-2 pt-4 text-[10px] leading-4 text-text-soft">
+          <div className="flex flex-col gap-1 border-t border-sidebar-border px-2 pt-4 text-[11.5px] leading-4 text-text-faint">
             <span className="mono-label">
               {dataThrough ? ui("GSC data through {0}", { "0": formatDay(dataThrough, { locale: ui.locale }) }) : ui("No GSC data yet")}
             </span>

@@ -90,7 +90,7 @@ export async function getConnectionStatus(userId: string | null | undefined, inc
 export async function runConnectionAction(userId: string | null | undefined, raw: unknown) {
   const owner = user(userId), action = connectionAction.parse(raw);
   if (action.action === "connect") {
-    const match = /^\/sites\/([A-Za-z0-9_-]{1,200})\/(?:assistant|keyword-research|domain-overview|backlinks)$/.exec(action.returnPath);
+    const match = /^\/sites\/([A-Za-z0-9_-]{1,200})\/(?:assistant|keyword-research|domain-overview|backlinks|opportunities|content)$/.exec(action.returnPath);
     if (!match || !await db.site.findFirst({ where: { id: match[1], userId: owner }, select: { id: true } })) throw new ContentError("Invalid return destination", 400);
     if (action.newProfile && action.profileId) throw new ContentError("Choose one ChatGPT connection", 400);
     const values = newTransaction();

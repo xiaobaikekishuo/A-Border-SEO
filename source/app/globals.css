@@ -3,10 +3,11 @@
 @import "shadcn/tailwind.css";
 
 /*
- * Local navy workspace theme, shared by every route and portalled control.
- * Violet is the action accent; cyan distinguishes the second chart series.
- * Semantic text, surface and state tokens keep tables and forms readable.
- * The original orange brand mark is retained in the logo component.
+ * Graphite workspace theme, shared by every route and portalled control.
+ * Surfaces are near-neutral greys with hairline borders; violet is kept for
+ * primary actions, the current page and the first chart series, and cyan
+ * distinguishes a second series. Every text token reads at 4.5:1 or more on
+ * the background, the cards and the sidebar (app/theme.test.ts).
  */
 
 @theme inline {
@@ -78,9 +79,11 @@
   --color-sidebar-border: var(--sidebar-border);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
+  --color-chart-previous: var(--chart-previous);
 
-  /* Type: Inter for UI and text, Geist Mono for uppercase labels, buttons and numbers */
-  --font-sans: var(--font-inter), system-ui, sans-serif;
+  /* Type: Inter for Latin text and figures, then the system's Chinese UI face;
+     Geist Mono only for code. Figures use Inter's tabular numerals. */
+  --font-sans: var(--font-inter), "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
   --tracking-label: 0.06em;
 
@@ -126,51 +129,51 @@
   --font-inter: "Inter", "Inter Fallback";
   --font-geist-mono: "Geist Mono", "Geist Mono Fallback";
 
-  --bg: #080e1c;
-  --bg-soft: #0d1526;
-  --bg-section: #19243a;
-  --text: #e0e8f5;
-  --text-strong: #f0f4fc;
-  --text-muted: #9aaecb;
-  --text-soft: #92a4bf;
-  --text-faint: #8799b4;
-  --border-color: #2b3952;
-  --border-soft: #223047;
-  --line-strong: #526684;
+  --bg: #0b0d11;
+  --bg-soft: #0e1015;
+  --bg-section: #181c23;
+  --text: #d5d9e0;
+  --text-strong: #f3f4f6;
+  --text-muted: #9aa1ac;
+  --text-soft: #a3a9b4;
+  --text-faint: #8a919d;
+  --border-color: #22262e;
+  --border-soft: #1b1f26;
+  --line-strong: #3a404b;
 
-  --brand-50: #17172f;
-  --brand-100: #24203f;
-  --brand-200: #39315e;
-  --brand-300: #62539a;
-  --brand-400: #9d89fa;
-  --brand-500: #a78bfa;
-  --brand-600: #b29fff;
-  --brand-700: #b9a8ff;
-  --brand-800: #cebdff;
-  --brand-900: #ddd3ff;
-  --brand-950: #eee9ff;
+  --brand-50: #17162a;
+  --brand-100: #221f3d;
+  --brand-200: #2f2a55;
+  --brand-300: #574bb0;
+  --brand-400: #7a6cf0;
+  --brand-500: #8d80ed;
+  --brand-600: #9d92f0;
+  --brand-700: #afa5f2;
+  --brand-800: #c6bff7;
+  --brand-900: #ddd8fb;
+  --brand-950: #efedfd;
 
-  --ink: #070c17;
-  --ink-text: #eef2fb;
-  --ink-lead: #9aaecb;
+  --ink: #090b0f;
+  --ink-text: #eef0f3;
+  --ink-lead: #9aa1ac;
 
   --button-primary: #6d5ce8;
-  --button-primary-hover: #5d4bd8;
-  --button-secondary: #1b283e;
-  --button-secondary-hover: #263650;
+  --button-primary-hover: #6352e0;
+  --button-secondary: #181c23;
+  --button-secondary-hover: #20252e;
 
-  --success: #50d6ae;
-  --success-bg: #102c29;
-  --warning: #f5cb77;
-  --warning-bg: #2b251a;
-  --danger: #ff8ea4;
-  --danger-bg: #301c2a;
+  --success: #5fe0a5;
+  --success-bg: #172b29;
+  --warning: #f0b44c;
+  --warning-bg: #2d2821;
+  --danger: #ff8b98;
+  --danger-bg: #2d2027;
 
   --background: var(--bg);
   --foreground: var(--text);
-  --card: #101a2d;
+  --card: #12151b;
   --card-foreground: var(--text);
-  --popover: #142037;
+  --popover: #1a1e26;
   --popover-foreground: var(--text);
   --primary: var(--button-primary);
   --primary-foreground: #ffffff;
@@ -188,42 +191,40 @@
   --sidebar-foreground: var(--text);
   --sidebar-border: var(--border-color);
 
-  /* Distinct bright series on dark cards; no change to metric meaning. */
+  /* Distinct series on dark cards: violet for this period, cyan for a second
+     series; a previous period is drawn dashed in --chart-previous. */
   --chart-1: var(--brand-500);
-  --chart-2: #4fd7ef;
+  --chart-2: #56c2dc;
+  --chart-previous: #7f8794;
   --chart-grid: var(--border-soft);
   --chart-axis: var(--text-muted);
 
-  --shadow-1: 0 2px 8px rgb(0 0 0 / 0.12);
-  --shadow-2: 0 8px 24px rgb(0 0 0 / 0.16);
-  --shadow-3: 0 24px 64px rgb(0 0 0 / 0.42);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.24);
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 0.28);
+  --shadow-3: 0 24px 64px rgb(0 0 0 / 0.5);
 }
 
-/* Mono is for uppercase text: labels, badges, table headers. */
+/* Labels, badges and table headers: the text face at 500, in their own case.
+   (The name predates the graphite theme, which dropped mono uppercase.) */
 @utility mono-label {
-  font-family: var(--font-mono);
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  font-synthesis: none;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
 }
 
-/* Button labels: the same mono uppercase, at 500. */
+/* Button labels: the text face at 500, in their own case. */
 @utility mono-button {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  font-synthesis: none;
+  letter-spacing: 0.005em;
 }
 
 /* Violet eyebrow labels connect the shell to the content planner. */
 @utility eyebrow {
-  font-family: var(--font-mono);
-  font-weight: 400;
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-label);
-  font-synthesis: none;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  letter-spacing: 0.02em;
   color: var(--brand-700);
 }
 
@@ -250,7 +251,7 @@
   html {
     @apply h-full font-sans;
     color-scheme: dark;
-    scrollbar-color: #435572 var(--bg-soft);
+    scrollbar-color: #3a404b var(--bg-soft);
     scrollbar-width: thin;
   }
 
@@ -308,11 +309,11 @@
 }
 
 @layer utilities {
-  /* Numbers, URLs, queries and code: mono in their own case, tabular figures. */
+  /* Numbers, URLs and queries: the text face with tabular figures, so columns
+     of numbers line up. Code keeps font-mono. */
   .font-data {
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-variant-numeric: tabular-nums;
-    font-synthesis: none;
   }
 }
 
@@ -389,12 +390,13 @@
     @apply rounded-xl border border-border bg-bg-soft;
   }
 
+  /* Page headers sit on the page itself, without a card or a colour wash. */
   .workspace-heading {
-    background: radial-gradient(ellipse at top left, rgb(109 92 232 / 0.1), transparent 70%), var(--card);
+    background: transparent;
   }
 
   .workspace-empty {
-    background: radial-gradient(ellipse at top, rgb(109 92 232 / 0.12), transparent 65%), var(--card);
+    background: var(--card);
   }
 
   .empty-illustration {

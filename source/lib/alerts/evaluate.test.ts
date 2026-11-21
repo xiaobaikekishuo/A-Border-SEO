@@ -90,12 +90,44 @@ describe("NOINDEX_SITEWIDE", () => {
   });
 });
 
+describe("RANK_DROP", () => {
+  const DAY = 86_400_000;
+  async function rankRun(siteId: string, finishedAt: Date, checks: { keyword: string; position: number | null }[]) {
+    const run = await db.rankRun.create({
+      data: { siteId, source: "manual", status: "SUCCEEDED", device: "desktop", depth: 30, language: "en", location: 2840, planned: checks.length, budgetUsd: 1, startedAt: finishedAt, finishedAt },
+    });
+    await db.rankCheck.createMany({
+      data: checks.map((c) => ({ siteId, runId: run.id, keyword: c.keyword, status: "OK", position: c.position, features: [], createdAt: finishedAt })),
+    });
+  }
+
+  it("fires once per run, for keywords 5 places down or off the first page", async () => {
+    await db.site.create({ data: { id: "r1", userId: "u1", domain: "r1.example" } });
+    await db.alert.create({ data: { userId: "u1", siteId: "r1", type: "RANK_DROP", channel: "EMAIL", config: { thresholdPositions: 5 } } });
+    await rankRun("r1", new Date(Date.now() - 2 * DAY), [
+      { keyword: "a", position: 3 }, { keyword: "b", position: 8 }, { keyword: "c", position: 20 }, { keyword: "d", position: 12 }, { keyword: "f", position: null },
+    ]);
+    expect(await evaluateAlertsForUser("u1", { siteId: "r1" })).toEqual([]);
+    // a: one place; b: off the first page; c: six places; d: out of the results; e: first check; f: never ranked.
+    await rankRun("r1", new Date(Date.now() - DAY), [
+      { keyword: "a", position: 4 }, { keyword: "b", position: 11 }, { keyword: "c", position: 26 }, { keyword: "d", position: null },
+      { keyword: "e", position: 40 }, { keyword: "f", position: null },
+    ]);
+    const fires = await evaluateAlertsForUser("u1", { siteId: "r1" });
+    expect(fires).toEqual([
+      expect.objectContaining({ type: "RANK_DROP", message: '3 tracked keywords dropped on r1.example: "d" 12 → not ranked, "c" 20 → 26, "b" 8 → 11' }),
+    ]);
+    // The same run does not fire again.
+    expect(await evaluateAlertsForUser("u1", { siteId: "r1" })).toEqual([]);
+  });
+});
+
 describe("ensureDefaultAlerts", () => {
   it("gives a new site every default alert, the noindex one included", async () => {
     await db.site.create({ data: { id: "fresh", userId: "u1", domain: "fresh.example" } });
     await ensureDefaultAlerts("u1", "fresh");
     const types = (await db.alert.findMany({ where: { siteId: "fresh" }, select: { type: true } })).map((a) => a.type);
-    expect(types.sort()).toEqual(["CRAWL_ISSUES", "NOINDEX_SITEWIDE", "POSITION_CHANGE", "TRAFFIC_DROP", "VITALS_DEGRADED"]);
+    expect(types.sort()).toEqual(["CRAWL_ISSUES", "NOINDEX_SITEWIDE", "POSITION_CHANGE", "RANK_DROP", "TRAFFIC_DROP", "VITALS_DEGRADED"]);
   });
 
   it("adds only the new type to a site that has alerts, and keeps one turned off off", async () => {
@@ -104,7 +136,7 @@ describe("ensureDefaultAlerts", () => {
     await ensureDefaultAlerts("u1", "s1", { newTypesOnly: true });
     await ensureDefaultAlerts("u1", "s1", { newTypesOnly: true });
     const rows = await db.alert.findMany({ where: { siteId: "s1" }, select: { type: true, enabled: true } });
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
     expect(rows.find((r) => r.type === "CRAWL_ISSUES")?.enabled).toBe(false);
     expect(rows.find((r) => r.type === "NOINDEX_SITEWIDE")?.enabled).toBe(true);
   });

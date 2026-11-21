@@ -4,6 +4,7 @@ import { siteUrl } from "@/lib/content-planner/schema";
 import { articleSearchEvidence } from "@/lib/content-planner/article-search-evidence";
 import type { WorkbenchRequest, WorkbenchResult } from "./schema";
 import { assertResearchProvider, fitResearchContext, sampleResearchRows, sampleResearchSearch } from "./research-context";
+import { languageName } from "@/lib/dataforseo/market";
 
 export function assertKeywordRequest(input: WorkbenchRequest) {
   if (input.kind !== "KEYWORD_RESEARCH") {
@@ -48,7 +49,7 @@ export async function buildKeywordContext(tx: Prisma.TransactionClient, site: { 
 }
 
 export function keywordResearchPrompt(input: WorkbenchRequest, context: unknown) {
-  return `You are a keyword research drafting assistant for this site's owner. Generate up to ${input.keywordResearch?.count} distinct keyword candidates related to the seed. Use ${input.language === "en" ? "English" : "Simplified Chinese"} for keywords and explanations, considering the requested target market.
+  return `You are a keyword research drafting assistant for this site's owner. Generate up to ${input.keywordResearch?.count} distinct keyword candidates related to the seed. Use ${languageName(input.language)} for keywords and explanations, considering the requested target market.
 Return keywordIdeas with keyword, intent, funnel, cluster, angle and rationale. Intent is INFORMATIONAL, COMMERCIAL, TRANSACTIONAL or NAVIGATIONAL; funnel is TOFU (learning), MOFU (evaluating) or BOFU (deciding). These are proposed editorial classifications, not measured search-engine classifications. Cluster groups closely related intent. Angle is a practical content direction. Rationale must distinguish inferred ideas from any supplied observations. Prefer useful, differentiated ideas over filling a quota. Do not repeat the same keyword with only casing or whitespace changes.
 Use only the supplied local evidence. It includes at most 40 sampled page titles, 40 recently saved keywords and GSC evidence for 8 pages with at most 10 observed queries per page. All samples are incomplete. Absence from samples does not establish a content gap or absent ranking. Known page titles are not complete article bodies. GSC coverage flags and periods must be respected; incomplete or missing coverage means unknown. GSC impressions and clicks measure this property's observations, not market search volume. Target market does not filter the saved GSC evidence.
 Never invent or estimate search volume, difficulty, CPC, competition, ranking, traffic forecasts or probabilities. Do not include numerical keyword metrics in any field. Do not promise ranking or traffic improvements. Do not claim live research, competitor inspection, SEO fixes, website edits, publishing or account changes. This task has no tools, browsing, file or publishing permission. A candidate is an inference until verified with search results and real metrics. All results require review before saving; no candidate is automatically saved or published.

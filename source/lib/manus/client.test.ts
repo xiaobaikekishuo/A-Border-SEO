@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { checkKey, createResearch, downloadResearchReport, downloadResearchWorkbook, normalizeResearchInput, readResearch } from "./client";
+import { checkKey, createResearch, createTemplateTask, downloadResearchReport, downloadResearchWorkbook, normalizeResearchInput, readResearch, readTemplateTask } from "./client";
+import { parseTemplateInput } from "./templates";
 import { MAX_WORKBOOK_BYTES } from "./workbook-limits";
 
 const transport = vi.fn<typeof fetch>();
@@ -246,5 +247,43 @@ describe("Manus keyword research", () => {
     reply({ ok: true, task_id: id, messages: [assistant("Summary", [{ ...attachment, filename: "report.md" }])] });
     transport.mockResolvedValueOnce(new Response(body));
     await expect(downloadResearchReport(key, id)).rejects.toMatchObject({ code });
+  });
+});
+
+describe("Manus research templates", () => {
+  const prospects = parseTemplateInput("LINK_PROSPECTS", {
+    site: "kammakhome.com", topic: "modular sofas", competitors: ["acme.test"], audience: "UK renters", language: "English", profile: "standard",
+  });
+
+  it("creates one private task with the template's schema and the chosen agent", async () => {
+    reply({ ok: true, task_id: id, task_url: "https://example.com/unsafe" });
+    await expect(createTemplateTask(key, "LINK_PROSPECTS", prospects, "standard")).resolves.toEqual({ remoteId: id, taskUrl: `https://manus.im/app/${id}` });
+    const [[url, options]] = transport.mock.calls;
+    expect(String(url)).toBe("https://api.manus.ai/v2/task.create");
+    const body = JSON.parse(String(options?.body));
+    expect(body).toMatchObject({ agent_profile: "standard", share_visibility: "private", interactive_mode: false, clear_connectors: true });
+    expect(body.structured_output_schema).toMatchObject({ type: "object", additionalProperties: false, required: ["summary", "prospects"] });
+    expect(body.message.content[0].text).toContain("modular sofas");
+    expect(String(options?.body)).not.toContain(key);
+  });
+
+  it("reads the summary and the structured result of a finished task", async () => {
+    detail("stopped");
+    reply({
+      ok: true, task_id: id, has_more: false,
+      messages: [
+        { type: "structured_output_result", structured_output_result: { success: true, value: { summary: "One", prospects: [] } } },
+        assistant("Done: one prospect."),
+      ],
+    });
+    await expect(readTemplateTask(key, id)).resolves.toEqual({
+      status: "completed", taskUrl: `https://manus.im/app/${id}`, summary: "Done: one prospect.", structured: { success: true, value: { summary: "One", prospects: [] } },
+    });
+  });
+
+  it("asks only for the status while the task runs", async () => {
+    detail("running");
+    await expect(readTemplateTask(key, id)).resolves.toMatchObject({ status: "running", structured: null });
+    expect(transport).toHaveBeenCalledTimes(1);
   });
 });

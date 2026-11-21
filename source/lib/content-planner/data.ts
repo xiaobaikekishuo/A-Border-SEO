@@ -131,7 +131,7 @@ export async function getContentWorkspace(db: PlannerDb, userId: string, siteId:
     jobs: jobs.map(({ request, ...j }) => ({ ...j, funnelCounts: j.kind === "ARTICLE_REVIEW" ? undefined : storedFunnelCounts(request, j.topicCount), result: j.kind === "ARTICLE_REVIEW" ? null : j.result as ContentPlan | null,
       keywordSelection: researchReferenceSchema.safeParse(request).data?.research.reference,
       reviewResult: j.kind === "ARTICLE_REVIEW" ? articleReviewSchema.safeParse(j.result).data ?? null : null,
-      reviewPages: j.kind === "ARTICLE_REVIEW" ? (articleReviewRequestSchema.safeParse(request).data?.pages ?? []).map(({ pageId, title, url, source }) => ({ pageId, title, url, source })) : [],
+      reviewPages: j.kind === "ARTICLE_REVIEW" ? (articleReviewRequestSchema.safeParse(request).data?.pages ?? []).map(({ pageId, title, url, source, signals, excerptShortened }) => ({ pageId, title, url, source, signals: signals ?? null, excerptShortened: excerptShortened ?? false })) : [],
       appliedAt: j.appliedAt?.toISOString() ?? null, createdAt: j.createdAt.toISOString(),
       startedAt: j.startedAt?.toISOString() ?? null, finishedAt: j.finishedAt?.toISOString() ?? null })),
     worker: { online: !!worker && now.getTime() - worker.lastSeenAt.getTime() < WORKER_ONLINE_MS,

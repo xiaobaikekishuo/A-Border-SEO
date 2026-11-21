@@ -27,7 +27,7 @@
 - Google Search Console 数据同步、站点抓取、SEO 审计和页面性能检查。
 - 中英文界面、A-Border 品牌、Pillar / Cluster 内容规划与 TOFU / MOFU / BOFU 分类。
 - AI 关键词建议、内容简报、文章草稿和修复建议，结果供人工审阅。
-- ChatGPT 账号连接、本机 Codex worker 和只读 MCP。
+- ChatGPT 账号连接、本机 Codex worker 和只读 MCP；用 ChatGPT 套餐额度做排名变化复盘、批量改标题和描述、多语言本地化、结构化数据代码、外链联络邮件草稿、搜索词聚类和每周 AI 行动清单；后台任务池在本机 Codex 空闲时按 5 小时和每周用量把快过期的额度用起来，并可按任务类型分配模型。
 - Manus 关键词研究、报告与 Excel 候选词预览、筛选及保存。
 - GEO 监测、GA4 引荐流量同步及数据导入。
 

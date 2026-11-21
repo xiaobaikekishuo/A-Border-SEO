@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { getI18n } from "@/lib/i18n/server";
 import Link from "next/link";
 import { crawlPageCeiling } from "@/lib/jobs/policy";
@@ -22,13 +23,14 @@ import { getNoindexWarning } from "@/lib/crawler/noindex-warning";
 import { NoindexWarningNotice } from "@/components/sites/noindex-warning";
 import { getCrawlActivity } from "@/lib/jobs/site-jobs";
 import { cn } from "@/lib/utils";
+import { formatDay } from "@/lib/format";
 
 interface SitePageProps {
   params: Promise<{ siteId: string }>;
 }
 
 export default async function SiteOverviewPage({ params }: SitePageProps) {
-  const { t } = await getI18n();
+  const { t, locale } = await getI18n();
   const session = await auth();
   const { siteId } = await params;
 
@@ -39,7 +41,6 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
       domain: true,
       gscProperty: true,
       gscSyncCoverage: { where: { propertyChecked: true }, distinct: ["gscProperty"], select: { gscProperty: true } },
-      _count: { select: { keywords: true, pages: true } },
     },
   });
 
@@ -49,7 +50,12 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
 
   // Search Console anonymises the query dimension on low-traffic sites, so a
   // synced site can have pages but no keywords. Either one means data arrived.
-  const hasData = site._count.keywords > 0 || site._count.pages > 0 ||
+  // One row is enough to know: counting every stored row took long on large sites.
+  const [anyKeyword, anyPage] = await Promise.all([
+    db.keyword.findFirst({ where: { siteId }, select: { id: true } }),
+    db.page.findFirst({ where: { siteId }, select: { id: true } }),
+  ]);
+  const hasData = Boolean(anyKeyword || anyPage) ||
     site.gscSyncCoverage.some(row => row.gscProperty === site.gscProperty);
   // Start independent reads only after the site's owner has been verified.
   const [crawl, latestVital, opportunities] = await Promise.all([
@@ -102,25 +108,39 @@ export default async function SiteOverviewPage({ params }: SitePageProps) {
         />
       ) : (
         <div className="flex flex-col gap-[22px]">
-          <DashboardMetrics siteId={siteId} />
+          {/* The page frame shows first; the slower cards stream in as their reads finish. */}
+          <Suspense fallback={<MetricsSkeleton />}>
+            <DashboardMetrics siteId={siteId} />
+          </Suspense>
           <TrafficChart siteId={siteId} />
 
           <div className="grid grid-cols-1 gap-3.5 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-            <TopKeywords siteId={siteId} />
+            <Suspense fallback={<PanelSkeleton rows={6} />}>
+              <TopKeywords siteId={siteId} />
+            </Suspense>
 
             <section className="panel flex flex-col gap-3 self-start px-5 py-[18px]">
-              <h2 className="text-[15px] leading-5 font-semibold">{t("Site checks", "站点检查")}</h2>
-              <CheckRow
-                label={t("Crawl health", "抓取健康分")}
-                value={
-                  noindexWarning
-                    ? t("Most pages noindex", "大多数页面为 noindex")
-                    : latestCrawl?.healthScore != null
-                      ? `${latestCrawl.healthScore}/100${latestCrawl.healthScoreVersion ? "" : " · " + t("legacy scoring", "旧算法")}`
-                      : t("n/a", "暂无")
-                }
-                tone={noindexWarning ? "warning" : undefined}
-              />
+              <div>
+                <h2 className="text-[14px] leading-5 font-semibold">{t("Site checks", "站点检查")}</h2>
+                {latestCrawl?.finishedAt && (
+                  <p className="text-[12.5px] leading-5 text-muted-foreground">
+                    {t("Last crawl {date}", "上次抓取 {date}", { date: formatDay(latestCrawl.finishedAt, { locale }) })}</p>
+                )}
+              </div>
+              {latestCrawl?.healthScore != null && !noindexWarning ? (
+                <HealthScore
+                  score={latestCrawl.healthScore}
+                  label={t("Crawl health", "抓取健康分")}
+                  note={latestCrawl.healthScoreVersion ? null : t("legacy scoring", "旧算法")}
+                  verdict={latestCrawl.healthScore >= 90 ? t("Good", "良好") : latestCrawl.healthScore >= 50 ? t("Needs attention", "需要关注") : t("Poor", "较差")}
+                />
+              ) : (
+                <CheckRow
+                  label={t("Crawl health", "抓取健康分")}
+                  value={noindexWarning ? t("Most pages noindex", "大多数页面为 noindex") : t("n/a", "暂无")}
+                  tone={noindexWarning ? "warning" : undefined}
+                />
+              )}
               <CheckRow
                 label={t("Crawl", "抓取")}
                 value={
@@ -190,6 +210,58 @@ async function getOverviewCrawl(siteId: string) {
     getCrawlActivity(db, siteId, latestCrawl?.finishedAt ?? null),
   ]);
   return { latestCrawl, latestIssueCount, latestPageCount, noindexWarning, crawlActivity };
+}
+
+/** The crawl health score as a ring: green from 90, amber from 50, red below. */
+function HealthScore({ score, label, note, verdict }: { score: number; label: string; note: string | null; verdict: string }) {
+  const tone = score >= 90 ? "success" : score >= 50 ? "warning" : "danger";
+  const circumference = 2 * Math.PI * 30;
+  const filled = (Math.max(0, Math.min(100, score)) / 100) * circumference;
+  return (
+    <div className="flex items-center gap-4 py-1">
+      <div className="relative size-[72px] shrink-0">
+        <svg viewBox="0 0 72 72" className="size-full" aria-hidden>
+          <circle cx="36" cy="36" r="30" fill="none" stroke="var(--border-color)" strokeWidth="6" />
+          <circle cx="36" cy="36" r="30" fill="none" stroke={`var(--${tone})`} strokeWidth="6" strokeLinecap="round"
+            strokeDasharray={`${filled.toFixed(1)} ${circumference.toFixed(1)}`} transform="rotate(-90 36 36)" />
+        </svg>
+        <span className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+          <span className="font-data text-[20px] font-semibold text-text-strong">{score}</span>
+          <span className="mt-0.5 font-data text-[10.5px] text-muted-foreground">/100</span>
+        </span>
+      </div>
+      <div className="flex min-w-0 flex-col items-start gap-1.5">
+        <span className="text-[13px] leading-5 text-muted-foreground">{label}{note ? ` · ${note}` : ""}</span>
+        <span className={cn("inline-flex h-[22px] items-center rounded-md px-2 text-[12px] font-medium",
+          tone === "success" ? "bg-success-bg text-success" : tone === "warning" ? "bg-warning-bg text-warning" : "bg-danger-bg text-danger")}>
+          {verdict}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function MetricsSkeleton() {
+  return (
+    <div aria-hidden="true" className="grid grid-cols-1 gap-3.5 motion-safe:animate-pulse sm:grid-cols-2 xl:grid-cols-4">
+      {Array.from({ length: 4 }, (_, index) => (
+        <div key={index} className="panel flex h-[132px] flex-col justify-center gap-3 px-5">
+          <div className="h-3 w-20 rounded bg-bg-section" />
+          <div className="h-7 w-28 rounded bg-bg-section" />
+          <div className="h-3 w-24 rounded bg-bg-section" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PanelSkeleton({ rows }: { rows: number }) {
+  return (
+    <div aria-hidden="true" className="panel flex flex-col gap-3 p-5 motion-safe:animate-pulse">
+      <div className="h-4 w-32 rounded bg-bg-section" />
+      {Array.from({ length: rows }, (_, index) => <div key={index} className="h-8 rounded bg-bg-section" />)}
+    </div>
+  );
 }
 
 function CheckRow({ label, value, tone }: { label: string; value: string; tone?: "danger" | "warning" }) {

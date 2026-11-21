@@ -5,6 +5,7 @@ import type { ImportablePagesResponse, ImportablePage } from "@/lib/content-plan
 import type { PlanJob, Pillar } from "./model";
 import type { Mutation } from "./planner-forms";
 import { FunnelBadge } from "./planner-ui";
+import { QualityChecklist } from "./review-quality";
 import s from "./planner.module.css";
 import b from "./bulk.module.css";
 
@@ -37,6 +38,7 @@ export function ArticleReviewPanel({ siteId, pillars, job, busy, active, workerO
           <p>{source?.url} · {source?.source === "PASTED" ? t("User-pasted body", "用户粘贴正文") : t("Crawled body excerpt", "抓取正文摘要")}</p><p>{t("Pillar", "主题支柱")}: {pillars.find(pillar => pillar.id === article.pillarId)?.title ?? article.pillarId} · {article.keyword}</p>
           <p>{t("Confidence", "置信度")}: {article.confidence === "HIGH" ? t("High", "高") : article.confidence === "MEDIUM" ? t("Medium", "中") : t("Low", "低")} · {article.reason}</p>
           <ReviewTasks label={t("Keep", "保留")} tasks={article.keep} /><ReviewTasks label={t("Add", "补充")} tasks={article.add} /><ReviewTasks label={t("Rewrite", "修改")} tasks={article.rewrite} />
+          <QualityChecklist quality={article.quality} adLaw={article.adLaw} signals={source?.signals} shortened={source?.excerptShortened} />
           {!!article.internalLinks.length && <div><h4>{t("Proposed internal links", "建议内链")}</h4>{article.internalLinks.map((link, index) => <p key={index}>{source?.url} → {link.sourceSection} → <strong>{link.anchor}</strong> → {link.target}<br />{link.reason}</p>)}</div>}
         </article>;
       })}

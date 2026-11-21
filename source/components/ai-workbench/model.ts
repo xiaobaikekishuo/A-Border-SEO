@@ -1,33 +1,67 @@
 import type { DiagnosticEvidence } from "@/lib/ai-workbench/diagnostic-types";
 import type { ReportSource } from "@/lib/ai-workbench/action-scope";
 import type { WorkbenchResult as StoredResult } from "@/lib/ai-workbench/schema";
-export type TaskKind = "WRITE_ARTICLE" | "REWRITE_ARTICLE" | "SEO_FIX_PLAN";
-export type TaskDiagnosticEvidence = Omit<DiagnosticEvidence, "pages" | "page"> & { page: Omit<NonNullable<DiagnosticEvidence["page"]>, "body"> | null };
-export type ParagraphEdit = { id: string; sourceText: string; replacementText: string; reason: string; evidence: string[]; verification: string[] };
+export type TaskKind = "WRITE_ARTICLE" | "REWRITE_ARTICLE" | "SEO_FIX_PLAN" | "LOCALIZE_ARTICLE" | "SCHEMA_MARKUP";
+export type TaskDiagnosticEvidence = Omit<DiagnosticEvidence, "pages" | "page"> & {
+  page: Omit<NonNullable<DiagnosticEvidence["page"]>, "body"> | null;
+};
+export type ParagraphEdit = {
+  id: string;
+  sourceText: string;
+  replacementText: string;
+  reason: string;
+  evidence: string[];
+  verification: string[];
+};
 export type WorkbenchResult = {
-  title: string; summary: string; contentMarkdown: string; metaTitle: string; metaDescription: string;
-  changeNotes: string[]; factChecks: string[]; internalLinks: { target: string; anchor: string; reason: string }[];
+  title: string;
+  summary: string;
+  contentMarkdown: string;
+  metaTitle: string;
+  metaDescription: string;
+  changeNotes: string[];
+  factChecks: string[];
+  internalLinks: { target: string; anchor: string; reason: string }[];
   paragraphEdits?: ParagraphEdit[];
   reportActions?: StoredResult["reportActions"];
+  /** Links outside the verified pages and trusted sources, replaced or listed by the server. */
+  linkReview?: StoredResult["linkReview"];
+  /** Localization: suggested local search terms, and the program's hreflang tags. */
+  localKeywords?: StoredResult["localKeywords"];
+  hreflang?: StoredResult["hreflang"];
+  /** Structured data: the blocks as checked by the program. */
+  schemaReview?: StoredResult["schemaReview"];
 };
 export type WorkbenchJob = {
-  id: string; kind: TaskKind; status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
-  title: string; createdAt: string; updatedAt: string; startedAt: string | null; finishedAt: string | null;
-  error: string | null; draftText: string | null; result: WorkbenchResult | null;
+  id: string;
+  kind: TaskKind;
+  status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  draftText: string | null;
+  result: WorkbenchResult | null;
   diagnosis?: TaskDiagnosticEvidence;
   reportSources?: ReportSource[];
 };
 export type WorkbenchData = {
-  site: { id: string; domain: string }; worker: { online: boolean; lastSeenAt: string | null };
-  activeTask?: { id: string; kind: string; title: string } | null;
-  pages: { id: string; url: string; title: string | null; hasBody: boolean }[];
+  site: { id: string; domain: string };
+  worker: { online: boolean; lastSeenAt: string | null };
+  activeTask?: { id: string; kind: string; title: string; background?: boolean } | null;
+  pages: { id: string; url: string; title: string | null; hasBody: boolean; hasSchema?: boolean }[];
   clusters: { id: string; title: string; keyword: string; url: string | null; pillarTitle: string }[];
   jobs: WorkbenchJob[];
 };
 export type DraftEditor = { jobId: string; text: string; baseline: string; updatedAt: string };
 export const isActiveJob = (job: WorkbenchJob) => job.status === "QUEUED" || job.status === "RUNNING";
 export function isAccountLimitError(message: string) {
-  return !/^Canceled by user/i.test(message) && /chatgpt_usage_limit|subscription_sharing_usage_limit_exceeded|usage limit|quota|rate limit/i.test(message);
+  return (
+    !/^Canceled by user/i.test(message) &&
+    /chatgpt_usage_limit|subscription_sharing_usage_limit_exceeded|usage limit|quota|rate limit/i.test(message)
+  );
 }
 export function syncDraftEditor(current: DraftEditor | null, job: WorkbenchJob | undefined): DraftEditor | null {
   if (!job) return current;
@@ -42,7 +76,10 @@ export function hasRewriteBody(body: string, pageId: string, pages: WorkbenchDat
 }
 
 /** Apply only to a unique, unchanged source fragment. Never rebase an owner's edits. */
-export function applyParagraphEdit(text: string, edit: ParagraphEdit): { ok: true; text: string } | { ok: false; reason: "missing" | "ambiguous" | "already" | "too_long" } {
+export function applyParagraphEdit(
+  text: string,
+  edit: ParagraphEdit,
+): { ok: true; text: string } | { ok: false; reason: "missing" | "ambiguous" | "already" | "too_long" } {
   if (!edit.sourceText || edit.sourceText === edit.replacementText) return { ok: false, reason: "already" };
   const at = text.indexOf(edit.sourceText);
   if (at < 0) return { ok: false, reason: edit.replacementText && text.includes(edit.replacementText) ? "already" : "missing" };

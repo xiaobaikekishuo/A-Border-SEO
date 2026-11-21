@@ -74,6 +74,8 @@ const CALLS: [string, Record<string, unknown>, RegExp][] = [
   ["get_bing_pages", { siteId: "site-a" }, /https:\/\/quayline\.app\/\s+\| 3/],
   ["get_ai_visibility", { siteId: "site-a" }, /AI platforms for quayline\.app[\s\S]*Access check: not run yet[\s\S]*ChatGPT[\s\S]*DeepSeek/],
   ["get_saved_keywords", { siteId: "site-a" }, /2 saved keywords[\s\S]*1 had no Search Console data[\s\S]*never seen query\s+\| -[\s\S]*launch target[\s\S]*quayline notes\s+\| \d/],
+  ["get_rankings", { siteId: "site-a" }, /No keywords are tracked for quayline\.app/],
+  ["get_citation_gaps", { siteId: "site-a" }, /Prompt tracking is not set up for quayline\.app/],
 ];
 
 describe("MCP tools", () => {

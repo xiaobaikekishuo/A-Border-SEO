@@ -4,6 +4,7 @@ import { workbenchResultSchema } from "@/lib/ai-workbench/schema";
 import { aiUsageSchema } from "@/lib/ai-usage/schema";
 import { validFunnelCounts } from "./funnel";
 import { keywordSelectionSchema } from "./keyword-selection";
+import { LIMIT_ERRORS, WORKER_CAPABILITIES, workerLimitsSchema, workerModelSchema } from "@/lib/ai-workbench/pool/limits";
 
 const text = (max = 500) => z.string().trim().min(1).max(max);
 const optionalText = z.string().trim().max(4000).optional();
@@ -84,6 +85,9 @@ export const workerActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("heartbeat"), workerId: text(100), jobId: id.optional(), leaseToken: text(200).optional(), metadata: workerMetadata }).strict(),
   z.object({ action: z.literal("complete"), ...lease, result: z.union([planSchema, articleReviewSchema, workbenchResultSchema]), usage: workerUsage }).strict(),
   z.object({ action: z.literal("fail"), ...lease, error: text(2000), usage: workerUsage }).strict(),
+  // 1.9.0 workers: their Codex allowance, read without sending a message (lib/ai-workbench/pool/limits.ts).
+  z.object({ action: z.literal("limits"), workerId: text(100), limits: workerLimitsSchema.nullable(), error: z.enum(LIMIT_ERRORS).nullable(),
+    models: z.array(workerModelSchema).max(40).optional(), capabilities: z.array(z.enum(WORKER_CAPABILITIES)).max(WORKER_CAPABILITIES.length).optional() }).strict(),
 ]);
 
 export function dedupeKey(keyword: string): string {

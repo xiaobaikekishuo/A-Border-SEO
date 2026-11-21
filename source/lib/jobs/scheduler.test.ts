@@ -210,6 +210,36 @@ describe("regular runs", () => {
     }
   });
 
+  it("schedules rank checks only where the owner chose an interval, tracks keywords and saved a DataForSEO login", async () => {
+    await db.apiKey.create({ data: { userId: "u1", provider: "dataforseo", encryptedLogin: "x", encryptedPassword: "x" } });
+    try {
+      await db.rankTracking.create({ data: { siteId: "site-01", scheduleDays: 7 } });
+      await db.rankTracking.create({ data: { siteId: "site-02", scheduleDays: null } });
+      // An interval but no tracked keyword: nothing to check.
+      await db.rankTracking.create({ data: { siteId: "site-03", scheduleDays: 1 } });
+      await db.savedKeyword.create({ data: { siteId: "site-01", query: "tracked one", tracked: true } });
+      await db.savedKeyword.create({ data: { siteId: "site-02", query: "tracked two", tracked: true } });
+      await db.savedKeyword.create({ data: { siteId: "site-03", query: "saved only" } });
+      await db.site.create({ data: { id: "no-login-rank", userId: "u2", domain: "nologin-rank.example" } });
+      await db.rankTracking.create({ data: { siteId: "no-login-rank", scheduleDays: 7 } });
+      await db.savedKeyword.create({ data: { siteId: "no-login-rank", query: "tracked three", tracked: true } });
+      const { queued } = await runScheduler(db, { now: at(0), config, force: true });
+      expect(queued["rank-check"]).toBe(1);
+      expect(await db.job.findFirstOrThrow({ where: { type: "rank-check" } })).toMatchObject({ siteId: "site-01", source: "schedule" });
+
+      await db.job.updateMany({ where: { type: "rank-check" }, data: { status: "SUCCEEDED", activeKey: null, createdAt: at(0), finishedAt: at(MIN) } });
+      await runScheduler(db, { now: at(3 * DAY), config, force: true });
+      expect(await db.job.count({ where: { type: "rank-check" } })).toBe(1);
+      await runScheduler(db, { now: at(7 * DAY), config, force: true });
+      expect(await db.job.count({ where: { type: "rank-check" } })).toBe(2);
+      await db.job.updateMany({ where: { type: "rank-check" }, data: { status: "SUCCEEDED", activeKey: null, finishedAt: at(7 * DAY + MIN) } });
+      await runScheduler(db, { now: at(14 * DAY), config: { ...config, rankTracking: false }, force: true });
+      expect(await db.job.count({ where: { type: "rank-check" } })).toBe(2);
+    } finally {
+      await db.apiKey.deleteMany({ where: { provider: "dataforseo" } });
+    }
+  });
+
   it("a scheduled crawl uses the page count of the site's last crawl, within the ceiling", async () => {
     vi.stubEnv("CRAWL_MAX_PAGES", "40");
     try {

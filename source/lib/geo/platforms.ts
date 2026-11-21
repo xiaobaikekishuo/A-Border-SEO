@@ -17,6 +17,8 @@
 
 export const GEO_PLATFORM_IDS = [
   "CHATGPT", "GOOGLE_AIO", "GOOGLE_AI_MODE", "GEMINI", "PERPLEXITY", "COPILOT", "CLAUDE", "GROK", "META_AI", "DEEPSEEK",
+  // Assistants used in China, recorded by hand. Appended: stored answers keep their platform ids.
+  "DOUBAO", "YUANBAO", "QWEN", "KIMI", "ERNIE",
 ] as const;
 export type GeoPlatformId = (typeof GEO_PLATFORM_IDS)[number];
 
@@ -182,6 +184,63 @@ export const GEO_PLATFORMS: readonly GeoPlatform[] = [
     note: {
       en: "DeepSeek publishes no crawler name, and its API cannot search the web. Record answers by hand.",
       zh: "DeepSeek 没有公布爬虫名称，接口也不能联网搜索。答案需要手动记录。",
+    },
+  },
+  /*
+   * Assistants used in China. None of them offers an answer API that prompt
+   * tracking could ask, or documents a crawler for its answers that the
+   * access check could imitate, so answers are recorded by hand from each
+   * app. Their referral names are the ones the GA4 import already uses
+   * (lib/geo/import.ts), so referred sessions show up here too.
+   */
+  {
+    id: "DOUBAO", name: "Doubao", nameZh: "豆包", vendor: "ByteDance",
+    crawlers: [], controlTokens: [], eligibility: "GENERIC", index: null, report: null,
+    referrers: ["Doubao"],
+    answers: { kind: "MANUAL" },
+    note: {
+      en: "ByteDance documents no crawler for Doubao's answers. Record answers seen in the Doubao app or doubao.com by hand; GA4 sessions from doubao.com count as referrals.",
+      zh: "字节跳动没有公布豆包回答所用的爬虫。请把在豆包 App 或 doubao.com 看到的回答手动记录；GA4 中来自 doubao.com 的会话计为引荐访问。",
+    },
+  },
+  {
+    id: "YUANBAO", name: "Tencent Yuanbao", nameZh: "腾讯元宝", vendor: "Tencent",
+    crawlers: [], controlTokens: [], eligibility: "GENERIC", index: null, report: null,
+    referrers: ["Yuanbao"],
+    answers: { kind: "MANUAL" },
+    note: {
+      en: "Tencent documents no crawler for Yuanbao's answers, which can draw on WeChat articles as well as the web. Record answers by hand; GA4 sessions from yuanbao.tencent.com count as referrals.",
+      zh: "腾讯没有公布元宝回答所用的爬虫；元宝的回答除网页外也会引用微信公众号文章。请手动记录回答；GA4 中来自 yuanbao.tencent.com 的会话计为引荐访问。",
+    },
+  },
+  {
+    id: "QWEN", name: "Qwen", nameZh: "千问", vendor: "Alibaba",
+    crawlers: [], controlTokens: [], eligibility: "GENERIC", index: null, report: null,
+    referrers: ["Qwen"],
+    answers: { kind: "MANUAL" },
+    note: {
+      en: "Alibaba documents no crawler for Qwen's answers. Record answers from the Qwen app or chat.qwen.ai by hand; GA4 sessions from Qwen and Tongyi hosts count as referrals.",
+      zh: "阿里巴巴没有公布千问（通义）回答所用的爬虫。请把在千问 App 或网页版看到的回答手动记录；GA4 中来自千问、通义域名的会话计为引荐访问。",
+    },
+  },
+  {
+    id: "KIMI", name: "Kimi", nameZh: "Kimi", vendor: "Moonshot AI",
+    crawlers: [], controlTokens: [], eligibility: "GENERIC", index: null, report: null,
+    referrers: ["Kimi"],
+    answers: { kind: "MANUAL" },
+    note: {
+      en: "Moonshot AI documents no crawler for Kimi's answers. Record answers by hand; GA4 sessions from kimi.com and kimi.moonshot.cn count as referrals.",
+      zh: "月之暗面没有公布 Kimi 回答所用的爬虫。请手动记录回答；GA4 中来自 kimi.com、kimi.moonshot.cn 的会话计为引荐访问。",
+    },
+  },
+  {
+    id: "ERNIE", name: "ERNIE Bot", nameZh: "文心一言", vendor: "Baidu",
+    crawlers: [], controlTokens: [], eligibility: "GENERIC", index: null, report: null,
+    referrers: ["ERNIE Bot"],
+    answers: { kind: "MANUAL" },
+    note: {
+      en: "Baidu documents no separate crawler for ERNIE Bot's answers, and this tool does not read Baidu's index. Record answers by hand; GA4 sessions from yiyan.baidu.com count as referrals.",
+      zh: "百度没有为文心一言的回答单独公布爬虫，本工具也不读取百度索引。请手动记录回答；GA4 中来自 yiyan.baidu.com 的会话计为引荐访问。",
     },
   },
 ];

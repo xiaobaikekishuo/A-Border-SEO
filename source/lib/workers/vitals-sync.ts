@@ -35,7 +35,7 @@ export async function syncVitalsForSite(
   let inserted = 0;
   let errorCode: PageSpeedErrorCode | undefined;
   const results: Array<
-    | { url: string; device: "MOBILE"; perfScore: number; lcp?: number; cls?: number }
+    | { url: string; device: "MOBILE"; perfScore: number; lcp?: number; cls?: number; fieldInp?: number; fieldSource?: "URL" | "ORIGIN" }
     | { url: string; error: string }
   > = [];
 
@@ -54,6 +54,13 @@ export async function syncVitalsForSite(
           perfScore: mobile.metrics.perfScore,
           speedIndex: mobile.metrics.speedIndex,
           ttfb: mobile.metrics.ttfb,
+          tbt: mobile.metrics.tbt,
+          // Real-user p75 from the Chrome UX Report, when Chrome has enough visits.
+          fieldSource: mobile.field?.source ?? null,
+          fieldLcp: mobile.field?.lcp,
+          fieldInp: mobile.field?.inp,
+          fieldCls: mobile.field?.cls,
+          fieldCategory: mobile.field?.category ?? null,
         },
       });
       inserted++;
@@ -63,6 +70,8 @@ export async function syncVitalsForSite(
         perfScore: mobile.metrics.perfScore,
         lcp: mobile.vitals.lcp,
         cls: mobile.vitals.cls,
+        fieldInp: mobile.field?.inp,
+        fieldSource: mobile.field?.source,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed";

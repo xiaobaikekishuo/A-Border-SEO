@@ -5,7 +5,7 @@ import { createTestDb, type TestDb } from "@/lib/testing/pglite";
 import { readPlatformOverview } from "./platform-overview";
 import { deleteAiReport, readAiReports, saveAiReport } from "./report-store";
 import {
-  addPrompts, deleteManualAnswer, deletePrompt, GEO_TRIAL_JOB, readAnswer, readTrackingWorkspace, recordManualAnswer, runPlan, saveTrackingSettings, updatePrompt,
+  addPrompts, deleteManualAnswer, deletePrompt, GEO_TRIAL_JOB, readAnswer, readTrackingWorkspace, recordManualAnswer, reviewAnswer, runPlan, saveTrackingSettings, updatePrompt,
 } from "./tracking";
 import { runVisibility } from "./visibility-job";
 
@@ -178,6 +178,58 @@ describe("prompt tracking", () => {
     await deletePrompt(db, "owner", SITE, prompt.id);
     expect(await db.geoAnswer.count({ where: { promptId: prompt.id } })).toBe(0);
   });
+
+  it("asks several times per prompt, keeps the reviewer's labels and finds citation gaps", async () => {
+    const db = testDb.db;
+    const site = "geo-samples";
+    await db.site.create({ data: { id: site, userId: "owner", domain: "kammaksamples.com" } });
+    await saveTrackingSettings(db, "owner", site, {
+      ...settings,
+      brands: { own: { name: "Kammak", aliases: [], domains: ["kammakhome.com"] }, competitors: [{ name: "Acme", aliases: [], domains: ["acme.test"] }] },
+      samples: 2, facts: [{ label: "Founded", value: "2015" }],
+    });
+    await addPrompts(db, "owner", site, { prompts: [{ text: "best sofa brand" }] });
+    let workspace = await readTrackingWorkspace(db, "owner", site);
+    expect(workspace.settings).toMatchObject({ samples: 2, facts: [{ label: "Founded", value: "2015" }] });
+    // One prompt, two platforms, two answers each; a trial still asks once.
+    expect(workspace.estimate).toEqual({ tasks: 4, usd: 0.016 });
+    expect(workspace.trialEstimate).toEqual({ tasks: 2, usd: 0.008 });
+    expect(await runPlan(db, "owner", site)).toMatchObject({ tasks: 4 });
+
+    const calls: string[] = [];
+    stubDataForSeo(calls);
+    const samplesJob = { id: "job-samples", type: "geo-visibility", siteId: site, source: "manual", attempts: 1, maxAttempts: 3 } as unknown as Job;
+    expect(await runVisibility({ db, job: samplesJob, workerId: "test", signal: new AbortController().signal })).toMatchObject({ status: "SUCCEEDED", planned: 4, done: 4, failed: 0 });
+    expect(calls).toHaveLength(4);
+    expect(await db.geoAnswer.findMany({ where: { siteId: site, platform: "CHATGPT" }, select: { sample: true }, orderBy: { sample: "asc" } })).toEqual([{ sample: 0 }, { sample: 1 }]);
+
+    workspace = await readTrackingWorkspace(db, "owner", site);
+    // Both answers of the run count; the range counts the one prompt once.
+    expect(workspace.latest.platforms.CHATGPT).toMatchObject({ answers: 2, prompts: 1, mentionRate: 1 });
+    expect(workspace.latest.platforms.CHATGPT!.mentionRange!.low).toBeLessThan(0.3);
+    const chatgpt = workspace.latest.cells.find(c => c.platform === "CHATGPT")!;
+    expect(chatgpt).toMatchObject({ samples: 2, namedIn: 2, citedIn: 2, review: null });
+    expect(workspace.latest.cells.filter(c => c.platform === "CHATGPT")).toHaveLength(1);
+    expect(workspace.runs[0].summary?.CHATGPT).toMatchObject({ answers: 2, prompts: 1 });
+
+    // A Chinese assistant recorded by hand: it names the competitor and cites a forum.
+    await recordManualAnswer(db, "owner", site, { promptId: chatgpt.promptId, platform: "DOUBAO", status: "OK", text: "推荐Acme的沙发", citations: ["https://www.zhihu.com/question/1"] });
+    workspace = await readTrackingWorkspace(db, "owner", site);
+    expect(workspace.gaps).toEqual([expect.objectContaining({ domain: "zhihu.com", type: "FORUM", gapAnswers: 1, competitors: ["Acme"], platforms: ["DOUBAO"] })]);
+
+    const review = await reviewAnswer(db, "owner", site, { id: chatgpt.answerId, accuracy: "PARTLY", sentiment: "POSITIVE", note: "Founding year missing" });
+    expect(review).toMatchObject({ accuracy: "PARTLY", sentiment: "POSITIVE", note: "Founding year missing" });
+    const answer = await readAnswer(db, "owner", site, chatgpt.answerId);
+    expect(answer.review).toMatchObject({ accuracy: "PARTLY" });
+    expect(answer.facts).toEqual([{ label: "Founded", value: "2015", status: "ABSENT" }]);
+    expect(answer.history.map(h => h.sample).sort()).toEqual([0, 1]);
+    workspace = await readTrackingWorkspace(db, "owner", site);
+    expect(workspace.latest.reviews.CHATGPT).toMatchObject({ reviewed: 1, partly: 1, positive: 1, inaccurate: 0 });
+    await expect(reviewAnswer(db, "other", site, { id: chatgpt.answerId, accuracy: "ACCURATE", sentiment: null })).rejects.toMatchObject({ status: 404 });
+    // All labels empty clears the review.
+    expect(await reviewAnswer(db, "owner", site, { id: chatgpt.answerId, accuracy: null, sentiment: null, note: "" })).toBeNull();
+    expect((await readAnswer(db, "owner", site, chatgpt.answerId)).review).toBeNull();
+  });
 });
 
 describe("imported AI reports and the platform overview", () => {
@@ -235,7 +287,7 @@ describe("imported AI reports and the platform overview", () => {
     await expect(readAiReports(db, "other", SITE)).rejects.toMatchObject({ status: 404 });
 
     const overview = await readPlatformOverview(db, "owner", SITE);
-    expect(overview.platforms).toHaveLength(10);
+    expect(overview.platforms).toHaveLength(15);
     expect(overview.platforms.find(p => p.id === "COPILOT")!.report).toMatchObject({ state: "GOOD", total: 12 });
     expect(overview.platforms.find(p => p.id === "CHATGPT")!.answers.state).toBe("GOOD");
     expect(overview.probe).toBeNull();

@@ -30,16 +30,16 @@ export default async function DashboardLayout({
     orderBy: { domain: "asc" },
   });
 
-  // Latest day of Search Console data per site, for the sidebar status block.
-  const latest = sites.length
-    ? await db.page.groupBy({
-        by: ["siteId"],
-        where: { siteId: { in: sites.map((s) => s.id) } },
-        _max: { date: true },
-      })
-    : [];
+  // Latest day of Search Console data per site, for the sidebar status block:
+  // the newest row of each site through its (siteId, date) index, rather than
+  // a maximum over every stored row.
+  const latest = await Promise.all(sites.map((s) => db.page.findFirst({
+    where: { siteId: s.id },
+    orderBy: { date: "desc" },
+    select: { date: true },
+  })));
   const dataThrough = Object.fromEntries(
-    latest.map((row) => [row.siteId, row._max.date?.toISOString().slice(0, 10) ?? null])
+    sites.map((s, index) => [s.id, latest[index]?.date.toISOString().slice(0, 10) ?? null])
   );
   const { t } = await getI18n();
 

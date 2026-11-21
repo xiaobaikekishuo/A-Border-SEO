@@ -9,6 +9,8 @@ const row = z.object({
   platform: z.string().min(1).max(100),
   path: z.string().min(1).max(2048),
   count: z.number().int().min(0).max(2_147_483_647),
+  engaged: z.number().int().min(0).max(2_147_483_647).optional(),
+  keyEvents: z.number().min(0).max(2_147_483_647).optional(),
 }).strict();
 const sourceCounts = {
   rows: z.array(row).max(10000),
@@ -52,6 +54,9 @@ function validateRows(kind: GeoKind, domain: string, rows: GeoRow[]) {
     if (!allowed.includes(r.platform) || normalizeGeoPath(r.path, domain) !== r.path) {
       throw new ContentError("Invalid platform or page path", 422);
     }
+    // Engaged sessions and key events are GA4 metrics, and a session's share of them is bounded by the sessions.
+    if (kind === "BOT" && (r.engaged !== undefined || r.keyEvents !== undefined)) throw new ContentError("Invalid crawler row", 422);
+    if (r.engaged !== undefined && r.engaged > r.count) throw new ContentError("More engaged sessions than sessions", 422);
     const key = JSON.stringify([r.day,r.platform,r.path]);
     if (seen.has(key)) throw new ContentError("Duplicate aggregate row", 422);
     seen.add(key);

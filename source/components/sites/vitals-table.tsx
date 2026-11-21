@@ -14,16 +14,21 @@ import {
   type MetricHeader,
 } from "@/components/ui/data-table";
 import { formatDay } from "@/lib/format";
+import { assessCoreWebVitals, type VitalsAssessment } from "@/lib/google/pagespeed-field";
 
 const HEADERS: MetricHeader[] = [
   { label: "URL", sortKey: "url", defaultDir: "asc" },
   { label: "Score", align: "right", sortKey: "perfScore", defaultDir: "asc" },
-  { label: "LCP", align: "right", sortKey: "lcp" },
-  { label: "CLS", align: "right", sortKey: "cls" },
-  { label: "INP", align: "right", sortKey: "inp" },
+  { label: "LCP (lab)", align: "right", sortKey: "lcp" },
+  { label: "CLS (lab)", align: "right", sortKey: "cls" },
+  { label: "TBT (lab)", align: "right", sortKey: "tbt" },
   { label: "TTFB", align: "right", sortKey: "ttfb" },
+  { label: "Field p75: LCP · INP · CLS", align: "right", sortKey: "fieldInp" },
+  { label: "Core Web Vitals", sortKey: "assessment" },
   { label: "When", sortKey: "date" },
 ];
+
+const ASSESSMENT_ORDER: Record<VitalsAssessment["status"], number> = { FAIL: 0, INCOMPLETE: 1, NO_FIELD_DATA: 2, PASS: 3 };
 
 export interface VitalsRowData {
   id: string;
@@ -31,11 +36,23 @@ export interface VitalsRowData {
   perfScore: number | null;
   lcp: number | null;
   cls: number | null;
+  /** Lab INP: Lighthouse never measures it, so older reports show it empty. */
   inp: number | null;
   ttfb: number | null;
+  /** Lab Total Blocking Time (ms). */
+  tbt?: number | null;
+  /** Chrome UX Report p75: URL (this page) or ORIGIN (the whole site). */
+  fieldSource?: "URL" | "ORIGIN" | null;
+  fieldLcp?: number | null;
+  fieldInp?: number | null;
+  fieldCls?: number | null;
   /** ISO string, serialized across the RSC boundary */
   date: string;
 }
+
+const STATUS_TEXT: Record<VitalsAssessment["status"], string> = {
+  PASS: "Passed", FAIL: "Not passed", INCOMPLETE: "Not enough data", NO_FIELD_DATA: "No field data",
+};
 
 export function VitalsTable({ rows }: { rows: VitalsRowData[] }) {
   const ui = useUiText();
@@ -44,9 +61,13 @@ export function VitalsTable({ rows }: { rows: VitalsRowData[] }) {
 
   const deferredSearch = useDeferredValue(search.trim().toLowerCase());
   const filtered = useMemo(() => {
+    const assessed = rows.map((r) => {
+      const assessment = assessCoreWebVitals(r.fieldSource ? { source: r.fieldSource, lcp: r.fieldLcp ?? undefined, inp: r.fieldInp ?? undefined, cls: r.fieldCls ?? undefined } : null);
+      return { ...r, assessmentResult: assessment, assessment: ASSESSMENT_ORDER[assessment.status] };
+    });
     const out = deferredSearch
-      ? rows.filter((r) => r.url.toLowerCase().includes(deferredSearch))
-      : rows;
+      ? assessed.filter((r) => r.url.toLowerCase().includes(deferredSearch))
+      : assessed;
     return sortRows(out, sort);
   }, [rows, deferredSearch, sort, ui]);
 
@@ -93,10 +114,23 @@ export function VitalsTable({ rows }: { rows: VitalsRowData[] }) {
                 {r.cls != null ? r.cls.toFixed(3) : ui("n/a")}
               </td>
               <td className="px-4 py-2.5 text-right font-data">
-                {r.inp != null ? `${Math.round(r.inp)}ms` : ui("n/a")}
+                {r.tbt != null ? `${Math.round(r.tbt)}ms` : ui("n/a")}
               </td>
               <td className="px-4 py-2.5 text-right font-data">
                 {r.ttfb != null ? `${r.ttfb.toFixed(2)}s` : ui("n/a")}
+              </td>
+              <td className="px-4 py-2.5 text-right font-data" title={r.fieldSource === "ORIGIN" ? ui("Whole-site data: this page has too few Chrome visits of its own") : undefined}>
+                {r.fieldSource ? <>
+                  {r.fieldLcp != null ? `${r.fieldLcp.toFixed(1)}s` : "–"} · {r.fieldInp != null ? `${Math.round(r.fieldInp)}ms` : "–"} · {r.fieldCls != null ? r.fieldCls.toFixed(2) : "–"}
+                  {r.fieldSource === "ORIGIN" && <span className="ml-1 text-xs text-muted-foreground">{ui("(site)")}</span>}
+                </> : ui("n/a")}
+              </td>
+              <td className="px-4 py-2.5 text-sm" title={r.assessmentResult.missing.length && r.assessmentResult.status !== "NO_FIELD_DATA" ? ui("No field data for: {0}", { "0": r.assessmentResult.missing.map((m) => m.toUpperCase()).join(", ") }) : undefined}>
+                <span className={cn(
+                  r.assessmentResult.status === "PASS" ? "text-success"
+                    : r.assessmentResult.status === "FAIL" ? "text-danger"
+                      : "text-muted-foreground"
+                )}>{ui(STATUS_TEXT[r.assessmentResult.status])}</span>
               </td>
               <td className="px-4 py-2.5 text-xs text-muted-foreground">
                 {formatDay(r.date, { locale: ui.locale, year: true, time: true })}

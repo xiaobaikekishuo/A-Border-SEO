@@ -160,6 +160,14 @@ export const HEALTH_SCORE_VERSION = "page-share-v1";
 export const HEALTH_TYPE_WEIGHTS = { CRITICAL: 30, WARNING: 12, INFO: 3 } as const;
 const SEVERITY_RANK = { INFO: 0, WARNING: 1, CRITICAL: 2 } as const;
 
+/**
+ * Types with one finding per URL whose details.kind names the problem (a
+ * redirect chain or a link to a single redirect; an invalid hreflang code or
+ * a missing x-default). Each kind is scored on its own, so one severe finding
+ * does not raise the severity of every milder one of the same type.
+ */
+const SCORED_BY_KIND = new Set(["REDIRECT", "HREFLANG"]);
+
 /** Site-wide findings (no robots.txt, no sitemap) describe the whole site, not one page. */
 function siteWide(issue: AuditPolicyIssue): boolean {
   if (issue.type === "MISSING_ROBOTS") return true;
@@ -186,7 +194,9 @@ export function computePageShareHealthScore(issues: readonly AuditPolicyIssue[],
   for (const issue of issues) {
     if (!scoredIssue(issue)) continue;
     const site = siteWide(issue);
-    const key = auditIssueDisplayType(issue) + (site ? ":site" : "");
+    const kind = object(issue.details).kind;
+    const key = auditIssueDisplayType(issue) + (site ? ":site" : "") +
+      (SCORED_BY_KIND.has(issue.type) && typeof kind === "string" ? `:${kind}` : "");
     const group = groups.get(key) ?? { severity: issue.severity, urls: new Set<string>(), site };
     if (SEVERITY_RANK[issue.severity] > SEVERITY_RANK[group.severity]) group.severity = issue.severity;
     group.urls.add(normalize(issue.url) ?? issue.url);

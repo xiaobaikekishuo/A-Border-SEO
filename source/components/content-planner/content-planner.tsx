@@ -7,7 +7,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { ArrowRight, BookOpen, CalendarDays, Check, CheckCircle2, ChevronRight, Copy, Download, FileDown, FileText, GitBranch, Globe, Info, Layers, LayoutGrid, List, Loader2, Pencil, Plus, RefreshCw, Search, Sparkles, Trash2, TrendingUp, X } from "lucide-react";
 import { ClusterForm, PillarForm, type Mutation } from "./planner-forms";
 import { BriefContent, ConceptGuide, FunnelBadge, Modal } from "./planner-ui";
-import { getPlannerLabels, applyPlanMessage, briefMarkdown, clusterRows, filterClusters, formatCount, jobLabel, linkEvidenceLabel, planErrorMessage, plannerStats, proposalSelectionCounts, runningJob, shortDate, type Cluster, type ClusterRow, type ContentStatus, type Funnel, type Pillar, type PlanJob, type PlannerData } from "./model";
+import { CONTENT_PLAN_CHANGED, getPlannerLabels, applyPlanMessage, briefMarkdown, clusterRows, filterClusters, formatCount, jobLabel, linkEvidenceLabel, planErrorMessage, plannerStats, proposalSelectionCounts, runningJob, shortDate, type Cluster, type ClusterRow, type ContentStatus, type Funnel, type Pillar, type PlanJob, type PlannerData } from "./model";
 import { ArticleReviewPanel, OptimizationTasks } from "./article-review";
 import { BulkImport } from "./bulk-import";
 import { ManagedArticleTable } from "./bulk-manage";
@@ -64,6 +64,12 @@ export function ContentPlanner({ siteId, domain, initialData, research }: {
     } finally { if (!signal?.aborted) { setLoading(false); setRefreshing(false); } }
   }, [endpoint, siteId, t]);
   useEffect(() => { const controller = new AbortController(); void refresh(controller.signal); return () => controller.abort(); }, [refresh]);
+  // Topics added by another panel on the page (query clusters) show up without a reload.
+  useEffect(() => {
+    const changed = (event: Event) => { if ((event as CustomEvent<{ siteId?: string }>).detail?.siteId === siteId) void refresh(); };
+    window.addEventListener(CONTENT_PLAN_CHANGED, changed);
+    return () => window.removeEventListener(CONTENT_PLAN_CHANGED, changed);
+  }, [refresh, siteId]);
   const activeJob = data?.jobs.find(runningJob);
   useEffect(() => {
     if (!activeJob || error) return;

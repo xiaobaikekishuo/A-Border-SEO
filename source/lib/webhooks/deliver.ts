@@ -10,7 +10,7 @@ import { assertWebhookTarget, InvalidWebhookUrlError, parseWebhookUrl, webhookDi
  * failed for a reason a retry can fix (lib/jobs/handlers.ts, alert-webhook).
  *
  * Headers of every delivery:
- *   X-ABorder-Event      alert.fired or test
+ *   X-ABorder-Event      alert.fired, report.weekly or test
  *   X-ABorder-Delivery   id of the delivery, the same on every retry
  *   X-ABorder-Timestamp  Unix time in seconds when this attempt was signed
  *   X-ABorder-Signature  sha256=<hex HMAC-SHA256 of "<timestamp>.<body>" with the secret>
@@ -20,7 +20,8 @@ export const WEBHOOK_TIMEOUT_MS = 10_000;
 export const MIN_SECRET_LENGTH = 16;
 export const MAX_SECRET_LENGTH = 256;
 
-export type WebhookEvent = "alert.fired" | "test";
+/** report.weekly: the weekly AI action list (lib/ai-workbench/weekly-delivery.ts). */
+export type WebhookEvent = "alert.fired" | "report.weekly" | "test";
 
 /** The secret as it is stored, or an error message. Never trimmed: the receiver signs with the exact value. */
 export function checkSecret(raw: unknown): { secret: string } | { error: string } {

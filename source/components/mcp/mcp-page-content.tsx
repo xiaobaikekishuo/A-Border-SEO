@@ -21,6 +21,16 @@ const TOOLS = [
       { name: "get_keywords", description: "Top queries, for the last N days or a date range" },
       { name: "get_pages", description: "Top pages, for the last N days or a date range" },
       { name: "get_traffic", description: "Daily clicks and impressions" },
+      { name: "get_saved_keywords", description: "Saved keywords with their Search Console totals" },
+      { name: "get_rankings", description: "Measured Google positions of tracked keywords" },
+    ],
+  },
+  {
+    category: "Bing",
+    items: [
+      { name: "get_bing_traffic", description: "Daily Bing clicks, impressions and crawl activity" },
+      { name: "get_bing_keywords", description: "Top Bing queries" },
+      { name: "get_bing_pages", description: "Top Bing pages" },
     ],
   },
   {
@@ -35,6 +45,13 @@ const TOOLS = [
     items: [
       { name: "get_vitals", description: "Core Web Vitals reports (LCP, CLS, INP, TTFB)" },
       { name: "get_opportunities", description: "Striking distance, low CTR, content decay, cannibalization" },
+    ],
+  },
+  {
+    category: "AI search (GEO)",
+    items: [
+      { name: "get_ai_visibility", description: "Each AI platform's access, answers and traffic" },
+      { name: "get_citation_gaps", description: "Sites AI answers cite for competitors but not for you" },
     ],
   },
 ];
@@ -129,7 +146,7 @@ export function McpPageContent({
           <ShieldCheck className="size-4" aria-hidden />
           {ui("Read-only tools")}</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          {ui("9 tools across 4 categories. They read your own sites' data and nothing else: no tool changes anything or starts a crawl or sync.")}</p>
+          {ui("16 tools across 6 categories. They read your own sites' data and nothing else: no tool changes anything or starts a crawl, a sync or a paid check.")}</p>
         <div className="mt-4 space-y-4">
           {TOOLS.map((group) => (
             <div key={group.category}>

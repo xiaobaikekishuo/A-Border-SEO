@@ -1,12 +1,12 @@
-import { z } from "zod";
-import { articleReviewSchema, articleReviewRequestSchema, articleReviewPrompt, validateArticleReview } from "./article-review-schema";
+import { ARTICLE_REVIEW_OUTPUT_SCHEMA, articleReviewRequestSchema, articleReviewPrompt, finalizeArticleReview } from "./article-review-schema";
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { ContentError } from "./http";
 import { aggregateUrlMetrics, expireContentJobs, LEASE_MS, metricWindow, RUN_TIMEOUT_MS, type PlannerDb } from "./data";
 import { buildContentPrompt } from "./prompt";
-import { outputSchema, siteUrl, validateBriefLinks, workerActionSchema } from "./schema";
+import { outputSchema, workerActionSchema } from "./schema";
 import { expireWorkbenchJobs } from "@/lib/ai-workbench/data";
+import { verifiedPageMatcher } from "@/lib/ai-workbench/source-url";
 import { claimWorkbenchJob, runWorkbenchLease } from "@/lib/ai-workbench/worker";
 import { storedUsage } from "@/lib/ai-usage/schema";
 import { storedFunnelCounts, matchesFunnelCounts } from "./funnel";
@@ -18,11 +18,13 @@ import { hostedLeaseScope, hostedClaimScope } from "@/lib/hosted/worker";
 import { hostedContext } from "@/lib/hosted/context";
 import { savedResearchSchema } from "./keyword-selection";
 import { fitPlanReferences, PLAN_TOO_LARGE } from "./claim-size";
+import { queueDueWeeklyReport } from "@/lib/ai-workbench/weekly-report";
+import { claimHints, queuePoolJob, recordWorkerLimits, workerStateId } from "@/lib/ai-workbench/pool/queue";
+import { withHint } from "@/lib/ai-workbench/pool/routing";
 
 async function workerSeen(db: PlannerDb, workerId: string, now: Date) {
-  const context = hostedContext.getStore();
-  if (context) workerId = `hosted:${context.deviceId}`;
-  await db.contentWorkerState.upsert({ where: { id: workerId }, create: { id: workerId, lastSeenAt: now }, update: { lastSeenAt: now } });
+  const id = workerStateId(workerId, hostedContext.getStore());
+  await db.contentWorkerState.upsert({ where: { id }, create: { id, lastSeenAt: now }, update: { lastSeenAt: now } });
 }
 async function claimContext(db: PlannerDb, job: { siteId: string; pillarId: string; topicCount: number; request?: unknown }) {
   const [site, pillar, existingTopics, crawl, window] = await Promise.all([
@@ -70,6 +72,11 @@ export async function runWorkerAction(db: PlannerDb, input: unknown, now = new D
       : await db.contentPlanJob.updateMany({ where, data });
     return { ok: true, allowed: allowed && changed.count === 1 };
   }
+  if (action.action === "limits") {
+    // The worker's Codex allowance, read without sending a message: the background pool runs on it.
+    await recordWorkerLimits(db, workerStateId(action.workerId, hostedContext.getStore()), action, now);
+    return { ok: true };
+  }
   if (action.action !== "claim" && action.jobId?.startsWith("aw_")) {
     if (!action.leaseToken) throw new ContentError("Provide both jobId and leaseToken for a job heartbeat");
     return runWorkbenchLease(db, { ...action, jobId: action.jobId, leaseToken: action.leaseToken }, now);
@@ -103,10 +110,20 @@ export async function runWorkerAction(db: PlannerDb, input: unknown, now = new D
       db.aiWorkbenchJob.findFirst({ where: { status: "QUEUED", ...ownerFilter }, orderBy: { createdAt: "asc" }, select: { id: true, createdAt: true } }),
     ]);
     if (desktopMaintenanceActive() || !managedAllows("codex")) return { ...protocol, job: null };
+    const hosted = hostedContext.getStore();
+    const worker = await db.contentWorkerState.findUnique({ where: { id: workerStateId(action.workerId, hosted) }, select: { limits: true, limitsAt: true, models: true, capabilities: true } });
+    const hints = claimHints(db, worker);
     if (workbench && (!candidate || workbench.createdAt < candidate.createdAt)) {
-      return { ...protocol, ...(await claimWorkbenchJob(db, workbench.id, now)) };
+      return { ...protocol, ...(await claimWorkbenchJob(db, workbench.id, now, hints)) };
     }
-    if (!candidate) return { ...protocol, job: null };
+    if (!candidate) {
+      // Nothing waiting: this week's AI action list of a site that turned it on, if due, else background pool work.
+      const owner = { userId: hosted?.userId ?? (scope.managed ? scope.userId : null) };
+      const weekly = await queueDueWeeklyReport(db, owner, hosted?.deviceId ?? null, now);
+      if (weekly) return { ...protocol, ...(await claimWorkbenchJob(db, weekly, now, hints)) };
+      const pooled = await queuePoolJob(db, owner, hosted?.deviceId ?? null, worker, now);
+      return pooled ? { ...protocol, ...(await claimWorkbenchJob(db, pooled, now, hints)) } : { ...protocol, job: null };
+    }
     const leaseToken = randomUUID();
     const leaseExpiresAt = new Date(now.getTime() + LEASE_MS);
     const changed = await db.contentPlanJob.updateMany({ where: { id: candidate.id, status: "QUEUED", ...ownerFilter },
@@ -124,8 +141,9 @@ export async function runWorkerAction(db: PlannerDb, input: unknown, now = new D
       const saved = await db.contentPlanJob.updateMany({ where: { id: candidate.id, status: "RUNNING", leaseToken },
         data: { context: context as Prisma.InputJsonValue } });
       if (!saved.count) throw new ContentError("Job lease is no longer valid", 409);
-      return { ...protocol, job: { jobId: candidate.id, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(),
-        prompt: isReview ? articleReviewPrompt(articleReviewRequestSchema.parse(context)) : buildContentPrompt(context as Awaited<ReturnType<typeof claimContext>>), outputSchema: isReview ? z.toJSONSchema(articleReviewSchema, { target: "draft-7" }) : outputSchema } };
+      const routing = hints ? await hints({ kind: candidate.kind, siteId: candidate.siteId }).catch(() => ({})) : {};
+      return withHint({ ...protocol, job: { jobId: candidate.id, leaseToken, leaseExpiresAt: leaseExpiresAt.toISOString(),
+        prompt: isReview ? articleReviewPrompt(articleReviewRequestSchema.parse(context)) : buildContentPrompt(context as Awaited<ReturnType<typeof claimContext>>), outputSchema: isReview ? ARTICLE_REVIEW_OUTPUT_SCHEMA : outputSchema } }, routing);
     } catch (error) {
       await db.contentPlanJob.updateMany({ where: { id: candidate.id, leaseToken, status: "RUNNING" },
         data: { status: "FAILED", activeKey: null, leaseToken: null, leaseExpiresAt: null, finishedAt: now,
@@ -139,20 +157,18 @@ export async function runWorkerAction(db: PlannerDb, input: unknown, now = new D
   let result: Prisma.InputJsonValue | undefined;
   if (action.action === "complete") {
     if (job.kind === "ARTICLE_REVIEW") {
-      result = validateArticleReview(action.result, articleReviewRequestSchema.parse(job.request)) as Prisma.InputJsonValue;
+      result = finalizeArticleReview(action.result, articleReviewRequestSchema.parse(job.request)) as Prisma.InputJsonValue;
     } else {
     if (!("topics" in action.result)) throw new ContentError("Expected topic plan result");
     if (action.result.topics.length !== job.topicCount) throw new ContentError(`Expected exactly ${job.topicCount} topics`);
     try {
       if (!matchesFunnelCounts(action.result.topics, storedFunnelCounts(job.request, job.topicCount))) throw new ContentError("Generated topics do not match this task's funnel distribution");
-      result = { ...action.result, topics: action.result.topics.map((topic) => ({ ...topic, brief: validateBriefLinks(topic.brief, job.site.domain) })) } as Prisma.InputJsonValue;
       const context = job.context as { allowedInternalLinks?: unknown } | null;
-      const allowed = new Set(Array.isArray(context?.allowedInternalLinks) ? context.allowedInternalLinks.filter((url): url is string => typeof url === "string") : []);
-      for (const topic of action.result.topics) {
-        for (const link of topic.brief.internalLinks) {
-          if (!allowed.has(siteUrl(link.target, job.site.domain)!)) throw new ContentError("AI internal links must use the verified URL evidence supplied with this job");
-        }
-      }
+      const verifiedPage = verifiedPageMatcher(Array.isArray(context?.allowedInternalLinks) ? context.allowedInternalLinks.filter((url): url is string => typeof url === "string") : [], job.site.domain);
+      // A suggested link outside the verified URL evidence is dropped rather than failing the whole plan;
+      // another spelling of a verified page (http, "www.", a trailing slash) takes its verified URL.
+      result = { ...action.result, topics: action.result.topics.map((topic) => ({ ...topic, brief: { ...topic.brief,
+        internalLinks: topic.brief.internalLinks.flatMap(link => { const target = verifiedPage(link.target); return target ? [{ ...link, target }] : []; }) } })) } as Prisma.InputJsonValue;
     } catch (error) { throw new ContentError((error as Error).message); }
     }
   }

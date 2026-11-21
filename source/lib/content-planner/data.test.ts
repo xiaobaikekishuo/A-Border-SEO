@@ -229,15 +229,18 @@ describe("local worker leases", () => {
     await expect(start(expired)).resolves.toMatchObject({ ok: true });
   });
 
-  it("extends a valid lease and validates AI URLs before accepting the result", async () => {
+  it("extends a valid lease and drops AI links outside the verified URLs instead of failing the plan", async () => {
     const now = new Date(); await start(now); const job = await claim(now);
     const heartbeatAt = new Date(now.getTime() + 60_000);
     await runWorkerAction(db, { action: "heartbeat", workerId: "test-worker", jobId: job.jobId, leaseToken: job.leaseToken }, heartbeatAt);
-    const plan = examplePlan(); plan.topics[0].brief.internalLinks = [{ target: "https://outside.example", title: "Bad", reason: "Foreign" }];
-    await expect(runWorkerAction(db, { action: "complete", jobId: job.jobId, leaseToken: job.leaseToken, result: plan }, heartbeatAt)).rejects.toMatchObject({ status: 400 });
-    plan.topics[0].brief.internalLinks[0].target = "https://ssad.shop/invented-page";
-    await expect(runWorkerAction(db, { action: "complete", jobId: job.jobId, leaseToken: job.leaseToken, result: plan }, heartbeatAt)).rejects.toMatchObject({ status: 400 });
-    await expect(runWorkerAction(db, { action: "complete", jobId: job.jobId, leaseToken: job.leaseToken, result: examplePlan() }, new Date(now.getTime() + 150_000))).resolves.toEqual({ ok: true });
+    const plan = examplePlan(); plan.topics[0].brief.internalLinks = [
+      { target: "https://outside.example", title: "Bad", reason: "Foreign" },
+      { target: "https://ssad.shop/invented-page", title: "Invented", reason: "Not in the evidence" },
+    ];
+    await expect(runWorkerAction(db, { action: "complete", jobId: job.jobId, leaseToken: job.leaseToken, result: plan }, new Date(now.getTime() + 150_000))).resolves.toEqual({ ok: true });
+    const saved = await db.contentPlanJob.findUniqueOrThrow({ where: { id: job.jobId } });
+    expect(saved.status).toBe("SUCCEEDED");
+    expect((saved.result as { topics: { brief: { internalLinks: unknown[] } }[] }).topics.map(topic => topic.brief.internalLinks)).toEqual([[], [], []]);
     expect(await db.contentCluster.count()).toBe(0);
   });
 
@@ -246,8 +249,11 @@ describe("local worker leases", () => {
     await db.page.create({ data: { siteId, url: target, date: new Date("2026-10-21"), clicks: 2, impressions: 10, position: 3 } });
     await start(); const job = await claim();
     expect(job.prompt).toContain(target);
-    const plan = examplePlan(); plan.topics[0].brief.internalLinks = [{ target, title: "Observed guide", reason: "Relevant supporting page" }];
+    const plan = examplePlan(); plan.topics[0].brief.internalLinks = [{ target, title: "Observed guide", reason: "Relevant supporting page" },
+      { target: "http://www.ssad.shop/article/observed/", title: "Same page", reason: "Another spelling" }];
     await expect(runWorkerAction(db, { action: "complete", jobId: job.jobId, leaseToken: job.leaseToken, result: plan })).resolves.toEqual({ ok: true });
+    const saved = (await db.contentPlanJob.findUniqueOrThrow({ where: { id: job.jobId } })).result as { topics: { brief: { internalLinks: { target: string }[] } }[] };
+    expect(saved.topics[0].brief.internalLinks.map(link => link.target)).toEqual([target, target]);
     const workspace = await getContentWorkspace(db, userId, siteId);
     expect(workspace.jobs[0]).not.toHaveProperty("context");
   });

@@ -27,16 +27,24 @@ export default async function AllSitesPage() {
       gscProperty: true,
       gscSyncCoverage: { where: { propertyChecked: true }, distinct: ["gscProperty"], select: { gscProperty: true } },
       createdAt: true,
-      _count: { select: { keywords: true, pages: true, crawls: true } },
+      // Synced days and crawls are small tables; the keyword and page rows are not, so
+      // those are never counted here: one stored row is enough to know data arrived.
+      _count: { select: { gscSyncCoverage: true, crawls: true } },
     },
     orderBy: { domain: "asc" },
   });
+  const stored = new Set((await Promise.all(sites.map(async site => {
+    const [keyword, page] = await Promise.all([
+      db.keyword.findFirst({ where: { siteId: site.id }, select: { id: true } }),
+      db.page.findFirst({ where: { siteId: site.id }, select: { id: true } }),
+    ]);
+    return keyword || page ? site.id : null;
+  }))).filter(Boolean));
 
   // Search Console anonymises the query dimension on low-traffic sites, so a
   // synced site can have pages but no keywords. Either one means data arrived.
   const hasData = (s: (typeof sites)[number]) =>
-    s._count.keywords > 0 || s._count.pages > 0 ||
-    s.gscSyncCoverage.some(row => row.gscProperty === s.gscProperty);
+    stored.has(s.id) || s.gscSyncCoverage.some(row => row.gscProperty === s.gscProperty);
 
   if (sites.length === 0) {
     return (
@@ -158,7 +166,7 @@ export default async function AllSitesPage() {
                 {" · "}{t("{n}/28 days reported", "有数据的天数：{n}/28", { n: metrics.coverage.currentReportedDays })}
               </p>}
               <p className="mt-4 font-data text-[12px] text-muted-foreground">
-                {t("{keywords} keyword rows · {pages} page rows · {crawls} crawls", "{keywords} 条关键词记录 · {pages} 条页面记录 · {crawls} 次抓取", { keywords: formatCompact(site._count.keywords), pages: formatCompact(site._count.pages), crawls: site._count.crawls })}
+                {t("{days} days synced · {crawls} crawls", "已同步 {days} 天 · {crawls} 次抓取", { days: site._count.gscSyncCoverage, crawls: site._count.crawls })}
               </p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {t("Added", "添加时间")} {formatDay(site.createdAt, {locale,  year: true })}

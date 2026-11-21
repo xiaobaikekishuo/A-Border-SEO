@@ -1,4 +1,5 @@
 import type { ResearchMarket } from "@/lib/dataforseo/market";
+import { locationIso } from "@/lib/dataforseo/market";
 import { DataForSeoError, liveTask, parseModels, parseResponses, parseScraper, parseSerpAi, type LlmModel, type ParsedAnswer } from "./dataforseo-parse";
 import { TASK_ESTIMATE_USD } from "./costs";
 import { geoPlatform, type AnswerSource, type GeoPlatformId } from "./platforms";
@@ -30,11 +31,9 @@ export const TASK_TIMEOUT_MS = 180_000;
 export const MAX_PROMPT_CHARS = 500;
 
 /** DataForSEO location codes of the research markets, as ISO 3166-1 alpha-2. */
-const COUNTRY: Record<number, string> = {
-  2840: "US", 2826: "GB", 2124: "CA", 2036: "AU", 2702: "SG", 2344: "HK", 2158: "TW", 2392: "JP", 2276: "DE", 2250: "FR",
-};
+/** ISO 3166-1 alpha-2 of a research location, for the endpoints that take a country code. */
 export function countryIso(location: number): string | null {
-  return COUNTRY[location] ?? null;
+  return locationIso(location);
 }
 
 /** Version numbers in a model name ("claude-haiku-4-5" -> [4, 5]); 8-digit snapshot dates are not versions. */

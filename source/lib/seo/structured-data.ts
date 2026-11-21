@@ -10,6 +10,21 @@ export type StructuredDataSignals = {
   /** An Organization or LocalBusiness node with a name. */
   organization: boolean;
   product: boolean; reviews: boolean; faq: boolean;
+  /*
+   * Added within version 2 (optional, so reports saved earlier still read):
+   * what a business entity node says about itself, for the site-level entity
+   * check of GEO readiness, and the newest valid dates of any node, for the
+   * freshness check.
+   */
+  /** A named business node (Organization, LocalBusiness and their kinds) has a logo. */
+  organizationLogo?: boolean;
+  /** The most http(s) sameAs profiles one named business node lists. */
+  organizationSameAs?: number;
+  /** A named business node gives a contactPoint, telephone, email or address. */
+  organizationContact?: boolean;
+  /** Newest valid datePublished / dateModified of any node, YYYY-MM-DD. */
+  published?: string | null;
+  modified?: string | null;
 };
 export type StructuredDataReport = {
   /** COMPLETE covers only the supported captured checks, never all Schema.org validation. */
@@ -116,7 +131,8 @@ export function analyzeStructuredData(html: string, page: { url: string; title?:
   const report: StructuredDataReport = { version: 2, coverage: "COMPLETE", truncated: false, jsonLdBlocks: 0, parsedBlocks: 0,
     otherMarkup: false, entities: [], findings: [], limitations: ["Captured inline JSON-LD only; JavaScript-rendered markup, remote contexts and microdata/RDFa are not validated.",
       "Field checks cover selected common types, not all Schema.org or Google requirements. Facts and rich-result eligibility require review."],
-    signals: { author: false, datePublished: false, dateModified: false, organization: false, product: false, reviews: false, faq: false } };
+    signals: { author: false, datePublished: false, dateModified: false, organization: false, product: false, reviews: false, faq: false,
+      organizationLogo: false, organizationSameAs: 0, organizationContact: false, published: null, modified: null } };
   const signals = report.signals!;
   // Names of the site's own organization, brand or website, and every review author, compared after all blocks are read.
   const ownNames = new Set<string>();
@@ -199,6 +215,19 @@ export function analyzeStructuredData(html: string, page: { url: string; title?:
       }
     }
     if (organization && nonempty(node.name)) signals.organization = true;
+    if (business && nonempty(node.name)) {
+      if (has("logo")) signals.organizationLogo = true;
+      const sameAs = (Array.isArray(node.sameAs) ? node.sameAs : [node.sameAs]).filter((v): v is string => nonempty(v) && !!httpUrl(v, page.url));
+      signals.organizationSameAs = Math.max(signals.organizationSameAs ?? 0, new Set(sameAs).size);
+      if (["contactPoint", "telephone", "email", "address"].some(has)) signals.organizationContact = true;
+    }
+    for (const [key, field] of [["datePublished", "published"], ["dateModified", "modified"]] as const) {
+      const value = node[key];
+      if (nonempty(value) && validDate(value)) {
+        const day = value.slice(0, 10);
+        if (!signals[field] || day > signals[field]!) signals[field] = day;
+      }
+    }
     if (article) {
       if (personName(node.author)) signals.author = true;
       if (nonempty(node.datePublished) && validDate(node.datePublished)) signals.datePublished = true;

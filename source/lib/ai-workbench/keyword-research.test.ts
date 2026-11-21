@@ -93,7 +93,10 @@ describe("keyword output contract", () => {
     expect(() => validateKeywordIdeas({ ...result, keywordIdeas: [idea, { ...idea, keyword: " APPLE   ID region " }] }, parsed)).toThrow("duplicate");
     expect(() => validateKeywordIdeas({ ...result, keywordIdeas: Array.from({ length: 13 }, (_, i) => ({ ...idea, keyword: `Topic ${i}` })) }, parsed)).toThrow("count");
     expect(() => validateKeywordIdeas({ ...result, metaTitle: "Publish me" }, parsed)).toThrow("publishing");
-    expect(() => validateWorkbenchResult({ ...result, keywordIdeas: [{ ...idea, rationale: "Visit https://invented.test/" }] }, "keyword.test", { allowedInternalLinks: [] })).toThrow("verified site URLs");
+    // An invented link in a candidate stays as text and is listed for review; it no longer fails the task.
+    const listed = validateWorkbenchResult({ ...result, keywordIdeas: [{ ...idea, rationale: "Visit https://invented.test/" }] }, "keyword.test", { allowedInternalLinks: [] });
+    expect(listed.keywordIdeas?.[0].rationale).toBe("Visit https://invented.test/");
+    expect(listed.linkReview).toEqual([{ url: "https://invented.test/", field: "keywordIdeas", status: "UNVERIFIED", action: "KEPT_IN_NOTES", context: "https://invented.test/" }]);
     expect(() => validateKeywordIdeas(result, workbenchRequestSchema.parse({ kind: "WRITE_ARTICLE", title: "Article" }))).toThrow("only supported");
   });
 });

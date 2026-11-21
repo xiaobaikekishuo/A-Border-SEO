@@ -78,11 +78,11 @@ function featureFor(path: string): ManagedFeature | undefined {
   if (path === "/api/desktop/oauth") return "geo";
   if (path === "/api/google/connection") return "jobs";
   if (/^\/api\/sites\/[^/]+\/(?:geo|geo-observations)(?:\/|$)/.test(path)) return "geo";
-  if (/^\/api\/sites\/[^/]+\/manus-keywords(?:\/|$)/.test(path)) return "manus";
+  if (/^\/api\/sites\/[^/]+\/manus-(?:keywords|research)(?:\/|$)/.test(path)) return "manus";
   if (path === "/api/chatgpt-connection"
     || /^\/api\/sites\/[^/]+\/(?:assistant|content|keyword-research)(?:\/|$)/.test(path)) return "codex";
   if (["/api/cron/tick", "/api/gsc/sync", "/api/bing/sync", "/api/gsc/properties", "/api/bing/sites"].includes(path)
-    || /^\/api\/sites\/[^/]+\/(?:crawl|vitals|index-status|ai-access)(?:\/|$)/.test(path)) return "jobs";
+    || /^\/api\/sites\/[^/]+\/(?:crawl|vitals|index-status|ai-access|rank-tracking)(?:\/|$)/.test(path)) return "jobs";
   return undefined;
 }
 

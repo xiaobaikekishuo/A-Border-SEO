@@ -12,7 +12,12 @@ export const REMEDIATION: Record<string, { title: string; howToFix: string }> = 
   REDIRECT: {
     title: "Redirect Detected",
     howToFix:
-      "Update internal links to point directly to the final destination URL instead of the redirecting URL. Eliminate redirect chains by ensuring each redirect resolves in a single hop.",
+      "Update internal links and the sitemap to point directly to the final destination URL instead of the redirecting URL. Eliminate redirect chains by ensuring each redirect resolves in a single hop, and use 301 or 308 for permanent moves.",
+  },
+  HREFLANG: {
+    title: "hreflang Problems",
+    howToFix:
+      "Use an ISO 639-1 language code, optionally with a script and an ISO 3166-1 region (en, en-GB, zh-Hant-TW), and x-default for the fallback page. On every language version, list that page itself and all other versions with fully qualified URLs, and make sure each listed version links back. Point hreflang only at canonical, indexable URLs that return 200 without redirecting.",
   },
   MISSING_TITLE: {
     title: "Missing Title Tag",
@@ -72,7 +77,7 @@ export const REMEDIATION: Record<string, { title: string; howToFix: string }> = 
   MISSING_SCHEMA: {
     title: "No Structured Data",
     howToFix:
-      "Add JSON-LD structured data relevant to the page type (Article, Product, FAQPage, etc.). Validate with Google's Rich Results Test before deploying.",
+      "Add JSON-LD that matches the visible content: Organization and WebSite on the home page, BreadcrumbList on inner pages, Article or BlogPosting with author and dates on articles, Product with Offer on product pages (reviews only if real), LocalBusiness for physical locations. Validate with Google's Rich Results Test and the Schema Markup Validator. FAQPage no longer produces rich results in Google Search; keep it only where the questions and answers are visible on the page.",
   },
   SLOW_PAGE: {
     title: "Slow Page Response",
@@ -90,3 +95,19 @@ export const REMEDIATION: Record<string, { title: string; howToFix: string }> = 
       "Reduce the HTML payload by removing inline CSS/JS, deferring non-critical resources, lazy-loading images, and minifying the HTML output. Aim for under 3 MB per page.",
   },
 };
+
+/**
+ * Fix texts that earlier releases stored with their findings, mapped to the
+ * issue type whose current text replaces them. Findings keep the text of the
+ * crawl that found them; this lets older crawls show the corrected advice.
+ */
+export const LEGACY_HOW_TO_FIX: Record<string, string> = {
+  // 1.5.7 and earlier recommended FAQPage, whose rich results Google retired on 2026-05-07.
+  "Add JSON-LD structured data relevant to the page type (Article, Product, FAQPage, etc.). Validate with Google's Rich Results Test before deploying.": "MISSING_SCHEMA",
+};
+
+/** The current fix text for a stored one: a retired text becomes its replacement, anything else is kept. */
+export function currentHowToFix(text: string): string {
+  const type = LEGACY_HOW_TO_FIX[text];
+  return type ? REMEDIATION[type]?.howToFix ?? text : text;
+}

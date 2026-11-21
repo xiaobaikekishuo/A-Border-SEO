@@ -10,9 +10,9 @@ function known(error: unknown): boolean {
     || (!!error && typeof error === "object" && "code" in error && ["P2002", "P2003", "P2025"].includes(String((error as { code: unknown }).code)));
 }
 
-export function geoFailure(error: unknown): Response {
+export function geoFailure(error: unknown, fallback = "The GEO request failed"): Response {
   if (!known(error)) console.error(error);
-  const response = known(error) ? contentErrorResponse(error) : Response.json({ error: "The GEO request failed" }, { status: 500 });
+  const response = known(error) ? contentErrorResponse(error) : Response.json({ error: fallback }, { status: 500 });
   response.headers.set("Cache-Control", NO_STORE["Cache-Control"]);
   return response;
 }

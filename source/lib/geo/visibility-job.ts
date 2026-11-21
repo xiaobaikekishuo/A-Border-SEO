@@ -7,7 +7,7 @@ import { askPlatform, claudeModels, pickClaudeModel, TASK_ESTIMATE_USD, TASK_TIM
 import { DataForSeoError } from "./dataforseo-parse";
 import { isGeoPlatformId, TRACKED_PLATFORMS, type GeoPlatformId } from "./platforms";
 import {
-  compactSummary, dataForSeoCredentials, GEO_TRIAL_JOB, GEO_VISIBILITY_JOB, settingsOf, summarizeByPlatform, TRACKING_LIMITS, type AnswerMeta,
+  compactSummary, dataForSeoCredentials, GEO_TRIAL_JOB, GEO_VISIBILITY_JOB, settingsOf, storedSamples, summarizeByPlatform, TRACKING_LIMITS, type AnswerMeta,
 } from "./tracking";
 
 /*
@@ -17,7 +17,9 @@ import {
  * The run stops starting tasks once the next one could take it over its
  * budget, and stops entirely when DataForSEO refuses the login or the balance.
  * A prompt deleted during the run is dropped from it. A trial (GEO_TRIAL_JOB)
- * is the same run with only the first active prompt.
+ * is the same run with only the first active prompt. With GeoTracking.samples
+ * above 1, every prompt is asked that many times on every platform, each
+ * answer saved under its own sample number.
  */
 
 export { GEO_TRIAL_JOB, GEO_VISIBILITY_JOB };
@@ -27,14 +29,14 @@ const RETRY_DELAYS_MS = [5_000, 20_000];
 /** Runs, and the answers they fetched, are kept this long. Recorded answers stay. */
 export const RUN_RETENTION_DAYS = 400;
 
-type Plan = { prompts: string[]; platforms: GeoPlatformId[]; market: ResearchMarket; claudeModel: string | null; trial: boolean };
+type Plan = { prompts: string[]; platforms: GeoPlatformId[]; market: ResearchMarket; claudeModel: string | null; trial: boolean; samples: number };
 type RunState = { id: string; status: string; planned: number; done: number; failed: number; costUsd: number; budgetUsd: number; plan: unknown };
 type SiteRow = { id: string; userId: string; domain: string; researchLanguage: string; researchLocation: number };
 type Stop = { status: "PARTIAL" | "FAILED"; message: string; code: string };
 type RunStatus = "SUCCEEDED" | "PARTIAL" | "FAILED";
 const managedStop: Stop = { status: "PARTIAL", message: "Device management paused this run after its in-flight requests.", code: "MANAGED_RESTRICTED" };
 
-const trackingFields = { brands: true, platforms: true, scheduleDays: true, budgetUsd: true } as const;
+const trackingFields = { brands: true, platforms: true, scheduleDays: true, budgetUsd: true, samples: true } as const;
 
 function readPlan(value: unknown): Plan {
   const plan = (value ?? {}) as Partial<Plan>;
@@ -44,6 +46,8 @@ function readPlan(value: unknown): Plan {
     market: plan.market ?? { language: "en", location: 2840 },
     claudeModel: typeof plan.claudeModel === "string" ? plan.claudeModel : null,
     trial: plan.trial === true,
+    // Plans saved before samples existed asked once.
+    samples: storedSamples(plan.samples),
   };
 }
 
@@ -91,10 +95,12 @@ async function createRun(db: PrismaClient, job: Job, site: SiteRow, credentials:
       // The Claude tasks fail on their own; the other platforms still run.
     }
   }
-  const plan: Plan = { prompts: prompts.map(p => p.id), platforms: settings.platforms, market: siteMarket(site), claudeModel, trial };
+  // A trial checks the setup and the cost: one answer per platform.
+  const samples = trial ? 1 : settings.samples;
+  const plan: Plan = { prompts: prompts.map(p => p.id), platforms: settings.platforms, market: siteMarket(site), claudeModel, trial, samples };
   try {
     return await db.geoRun.create({
-      data: { siteId: site.id, jobId: job.id, source: job.source, status: "RUNNING", plan, planned: prompts.length * settings.platforms.length, budgetUsd: settings.budgetUsd },
+      data: { siteId: site.id, jobId: job.id, source: job.source, status: "RUNNING", plan, planned: prompts.length * settings.platforms.length * samples, budgetUsd: settings.budgetUsd },
     }) as RunState;
   } catch (error) {
     // Another attempt of this job created it first.
@@ -117,11 +123,11 @@ function permanentFor(error: DataForSeoError): JobError {
  */
 async function finishRun(db: PrismaClient, runId: string, plan: Plan, site: SiteRow, stop: Stop | null) {
   const [answers, record, remaining] = await Promise.all([
-    db.geoAnswer.findMany({ where: { runId }, select: { id: true, promptId: true, platform: true, source: true, status: true, text: true, citations: true, error: true, createdAt: true } }),
+    db.geoAnswer.findMany({ where: { runId }, select: { id: true, promptId: true, platform: true, source: true, status: true, text: true, citations: true, error: true, createdAt: true, sample: true } }),
     db.geoTracking.findUnique({ where: { siteId: site.id }, select: trackingFields }),
     db.geoPrompt.count({ where: { id: { in: plan.prompts }, siteId: site.id } }),
   ]) as [{ status: string; id: string; promptId: string; platform: string; source: string; text: string | null; citations: unknown; error: string | null; createdAt: Date }[], Parameters<typeof settingsOf>[0], number];
-  const planned = remaining * plan.platforms.length;
+  const planned = remaining * plan.platforms.length * plan.samples;
   const done = answers.length;
   const failed = answers.filter(a => a.status === "FAILED").length;
   const status = stop?.status ?? runStatus(planned, done, failed);
@@ -179,24 +185,27 @@ async function executeRun(db: PrismaClient, run: RunState, plan: Plan, site: Sit
   const runId = run.id;
   const budget = run.budgetUsd;
   const prompts = new Map((await db.geoPrompt.findMany({ where: { id: { in: plan.prompts }, siteId: site.id }, select: { id: true, text: true } }) as { id: string; text: string }[]).map(p => [p.id, p.text]));
-  const done = new Set((await db.geoAnswer.findMany({ where: { runId }, select: { promptId: true, platform: true } }) as { promptId: string; platform: string }[]).map(a => `${a.promptId}\0${a.platform}`));
+  const done = new Set((await db.geoAnswer.findMany({ where: { runId }, select: { promptId: true, platform: true, sample: true } }) as { promptId: string; platform: string; sample: number }[]).map(a => `${a.promptId}\0${a.platform}\0${a.sample}`));
   const ownDomains = settingsOf(await db.geoTracking.findUnique({ where: { siteId: site.id }, select: trackingFields }), site.domain)?.brands.own.domains ?? [site.domain];
   // Prompts in the plan order, each on every platform: one prompt's answers arrive together.
+  // Samples go round after round, so a run stopped at its budget still has every prompt asked once.
   // Prompts deleted since the run started are dropped.
-  const tasks = plan.prompts.filter(id => prompts.has(id))
-    .flatMap(promptId => plan.platforms.map(platform => ({ promptId, platform })))
-    .filter(t => !done.has(`${t.promptId}\0${t.platform}`));
+  const samples = Array.from({ length: plan.samples }, (_, i) => i);
+  const tasks = samples
+    .flatMap(sample => plan.prompts.filter(id => prompts.has(id))
+      .flatMap(promptId => plan.platforms.map(platform => ({ promptId, platform, sample }))))
+    .filter(t => !done.has(`${t.promptId}\0${t.platform}\0${t.sample}`));
 
   let cost = run.costUsd;
   // Written by the workers; an object, so the checks after them see the writes.
   const outcome: { stopped: Stop | null; fatal: JobError | null; crash: unknown } = { stopped: null, fatal: null, crash: null };
   let next = 0;
 
-  const save = async (promptId: string, platform: GeoPlatformId, data: { status: "OK" | "NO_ANSWER" | "FAILED"; text?: string; citations?: unknown; meta?: AnswerMeta; costUsd?: number; error?: string }) => {
+  const save = async (promptId: string, platform: GeoPlatformId, sample: number, data: { status: "OK" | "NO_ANSWER" | "FAILED"; text?: string; citations?: unknown; meta?: AnswerMeta; costUsd?: number; error?: string }) => {
     try {
       await db.geoAnswer.create({
         data: {
-          siteId: site.id, runId, promptId, platform, source: "DATAFORSEO", status: data.status, text: data.text || null,
+          siteId: site.id, runId, promptId, platform, sample, source: "DATAFORSEO", status: data.status, text: data.text || null,
           citations: data.citations ?? [], meta: data.meta ?? undefined, costUsd: data.costUsd ?? 0, error: data.error ?? null,
         },
       });
@@ -220,7 +229,7 @@ async function executeRun(db: PrismaClient, run: RunState, plan: Plan, site: Sit
           outcome.stopped ??= managedStop;
           break;
         }
-        const { promptId, platform } = tasks[next];
+        const { promptId, platform, sample } = tasks[next];
         if (deadline !== undefined && Date.now() > deadline - TASK_TIMEOUT_MS - 10_000) {
           outcome.stopped ??= { status: "PARTIAL", message: "Stopped at the time limit of this host. Run again to finish.", code: "TIME_LIMIT" };
           break;
@@ -255,11 +264,11 @@ async function executeRun(db: PrismaClient, run: RunState, plan: Plan, site: Sit
             outcome.fatal ??= permanentFor(error);
             break;
           }
-          await save(promptId, platform, { status: "FAILED", error: error instanceof Error ? error.message.slice(0, 300) : "Request failed" });
+          await save(promptId, platform, sample, { status: "FAILED", error: error instanceof Error ? error.message.slice(0, 300) : "Request failed" });
           continue;
         }
         cost += answer.cost - estimate;
-        await save(promptId, platform, {
+        await save(promptId, platform, sample, {
           status: answer.status, text: answer.text, citations: answer.citations, costUsd: answer.cost,
           meta: { model: answer.model, consulted: answer.consulted, fanOut: answer.fanOut, ...(answer.organicRank !== undefined && { organicRank: answer.organicRank }) },
         });

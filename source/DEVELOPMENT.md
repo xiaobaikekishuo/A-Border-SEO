@@ -53,6 +53,12 @@ scripts/            构建与维护脚本
 | `npm run local-worker` | 运行本机 Codex worker，见 `local-worker/README.md` |
 | `npm run seed:demo` | 写入演示数据（`seed:demo:clean` 删除） |
 
+## 代码风格
+
+- **格式**：Codex 工作台和 ChatGPT 研究面板的界面代码（`components/ai-workbench/`，以及 `components/research/` 里的 `keyword-ai-panel.tsx`、`research-ai-panel.tsx` 和它们用到的模型、文案、表单文件）用 Prettier 格式化，配置在 `.prettierrc.json`（每行 140 字符）。改完这些文件后运行 `npx prettier@3 --write <文件>`。`components/ai-workbench/code-style.test.ts` 检查这些文件：除单独一行的长文案外，每行不超过 160 字符。Prettier 没有加进依赖；其他目录保持原来的写法，改到时可以用同一配置格式化，再把目录加进这个测试。
+- **共用的放一处**：任务列表的读取、任务进行中的轮询、后台任务不挡手动任务、开始和取消在 `components/ai-workbench/use-site-tasks.ts`；几个面板共用的提示在 `task-messages.ts`；关键词和诊断任务的报错说明在 `components/research/research-messages.ts`，它们的输入表单在 `use-research-input.ts`。新面板直接用这些，不要再复制一份。
+- **文案**：中英文仍然写在调用处（`t("English", "中文")`），两种语言放在一起，测试也按这个写法检查文案；同一句话用在多处时才提到共用文件里。
+
 ## 数据库与迁移
 
 - 迁移是显式的：`prisma/migrations` 按目录名顺序执行，测试用的 PGlite 也执行同一套迁移。
@@ -97,6 +103,10 @@ Auth.js v5 + Google OAuth。Google 令牌和用户保存的 API Key 用 `NEXTAUT
 
 - 后台接口：`POST /api/local-content-worker`（Bearer `LOCAL_CONTENT_WORKER_TOKEN`），动作有 `heartbeat`、`claim`、`complete`、`fail`；租约 120 秒，worker 每 30 秒续约。
 - `local-worker/` 是跨平台 Node 实现；Windows 套件里的 PowerShell worker 使用同一协议。
+
+### Codex 工作台界面
+
+`components/ai-workbench/workbench.tsx` 只管状态和动作（读取、轮询、开始、取消、保存草稿）；新建任务的表单在 `workbench-composer.tsx`，任务记录、结果和草稿编辑在 `workbench-result.tsx`，任务类型、状态名和报错说明在 `workbench-text.ts`。优化机会、外链和内容规划页的结构化任务面板共用 `tool-panel.tsx` 的框架和 `useToolTasks`。
 
 ### 扩展
 

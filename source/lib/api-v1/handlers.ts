@@ -9,6 +9,8 @@ import { getAllOpportunities } from "@/lib/seo-opportunities";
 import { gscDate } from "@/lib/google/gsc-date";
 import { readPlatformOverview } from "@/lib/geo/platform-overview";
 import { geoPlatform } from "@/lib/geo/platforms";
+import { readTrackingWorkspace } from "@/lib/geo/tracking";
+import { readRankWorkspace } from "@/lib/rank-tracking/tracking";
 import { ApiError, enumParam, intParam, periodParam } from "./params";
 
 /*
@@ -169,11 +171,21 @@ type VitalsRow = {
   ttfb: number | null;
   perfScore: number | null;
   speedIndex: number | null;
+  tbt: number | null;
+  fieldSource: string | null;
+  fieldLcp: number | null;
+  fieldInp: number | null;
+  fieldCls: number | null;
+  fieldCategory: string | null;
 };
 
 function vitalsView(v: VitalsRow) {
-  const { url, date, device, lcp, cls, inp, fid, ttfb, perfScore, speedIndex } = v;
-  return { url, date, device, lcp, cls, inp, fid, ttfb, perfScore, speedIndex };
+  const { url, date, device, lcp, cls, inp, fid, ttfb, perfScore, speedIndex, tbt, fieldSource, fieldLcp, fieldInp, fieldCls, fieldCategory } = v;
+  return {
+    url, date, device, lcp, cls, inp, fid, ttfb, perfScore, speedIndex, tbt,
+    // Chrome UX Report p75 (last 28 days): URL or ORIGIN level, null without enough visits.
+    field: fieldSource ? { source: fieldSource, lcp: fieldLcp, inp: fieldInp, cls: fieldCls, category: fieldCategory } : null,
+  };
 }
 
 export async function vitals(site: Site, params: URLSearchParams) {
@@ -289,6 +301,70 @@ export async function savedKeywords(site: Site, params: URLSearchParams) {
       notes: s.notes,
       savedAt: s.createdAt,
       ...(byQuery.get(s.query) ?? { clicks: null, impressions: null, position: null, ctr: null }),
+    })),
+  };
+}
+
+/**
+ * Rank tracking: every tracked keyword's measured Google position in the
+ * site's research market, how it moved since the check before, the ranking
+ * page and the AI Overview, next to Search Console's average position over
+ * the last 28 days; and the latest run. Reads stored checks; runs none.
+ */
+export async function rankings(site: Site, userId: string) {
+  const w = await readRankWorkspace(db, userId, site.id);
+  const run = w.runs[0] ?? null;
+  return {
+    site,
+    market: w.market,
+    settings: { device: w.settings.device, depth: w.settings.depth, aiOverview: w.settings.aiOverview, scheduleDays: w.settings.scheduleDays },
+    summary: w.summary,
+    lastRun: run && {
+      status: run.status, startedAt: run.startedAt, finishedAt: run.finishedAt, checks: run.checks, done: run.done, failed: run.failed,
+      costUsd: run.costUsd, errorCode: run.errorCode,
+    },
+    keywords: w.rows.filter((r) => r.tracked).map((r) => ({
+      keyword: r.keyword,
+      position: r.latest?.position ?? null,
+      previous: r.previous?.position ?? null,
+      change: r.change,
+      movement: r.movement,
+      url: r.latest?.url ?? null,
+      urlChanged: r.urlChanged,
+      aiOverview: r.latest?.aiOverview ?? null,
+      aiCited: r.latest?.aiCited ?? null,
+      features: r.latest?.features ?? [],
+      checkedAt: r.latest?.checkedAt ?? null,
+      lastCheckFailed: !!r.failure,
+      gscPosition: r.gsc?.position ?? null,
+    })),
+  };
+}
+
+/**
+ * Third-party sites that AI answers of prompt tracking cite while naming a
+ * competitor and leaving the brand out: where the brand could earn a mention.
+ * From the latest answer per prompt and platform; asks no platform.
+ */
+export async function citationGaps(site: Site, userId: string) {
+  const w = await readTrackingWorkspace(db, userId, site.id);
+  const prompts = new Map(w.prompts.map((p) => [p.id, p.text]));
+  return {
+    site,
+    since: w.latest.since,
+    brand: w.settings?.brands.own.name ?? null,
+    competitors: w.settings?.brands.competitors.map((c) => c.name) ?? [],
+    activePrompts: w.prompts.filter((p) => p.active).length,
+    gaps: w.gaps.slice(0, 30).map((g) => ({
+      domain: g.domain,
+      type: g.type,
+      gapAnswers: g.gapAnswers,
+      answers: g.answers,
+      withBrand: g.withBrand,
+      competitors: g.competitors,
+      platforms: g.platforms,
+      prompts: g.promptIds.map((id) => prompts.get(id)).filter((t): t is string => !!t).slice(0, 5),
+      urls: g.urls,
     })),
   };
 }

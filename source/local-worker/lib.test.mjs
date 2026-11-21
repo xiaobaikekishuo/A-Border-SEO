@@ -1,8 +1,9 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_DISABLED_FEATURES, LIMITS, PROMPT_PREAMBLE, childEnv, execArgs, failureFromExit, generateToken, isLoopbackHost, loginArgs,
-  parseBaseUrl, parseConfig, promptText, reportedUsage, safeCode, schemaText, summarizeEvents, tokenFrom, validateClaim, workerHeaders,
+  DEFAULT_DISABLED_FEATURES, LIMITS, PROMPT_PREAMBLE, appServerArgs, appServerInitialize, appServerRequests, childEnv, execArgs, failureFromExit, generateToken,
+  isLoopbackHost, loginArgs, parseBaseUrl, parseConfig, parseModels, parseRateLimits, promptText, reportedUsage, safeCode, schemaText, summarizeEvents, tokenFrom,
+  validateClaim, workerHeaders,
 } from "./lib.mjs";
 
 const posix = (env = {}, argv = []) => parseConfig({ ABORDER_WORKER_RUNTIME: "/tmp/aborder-worker", ABORDER_CODEX_HOME: "/tmp/aborder-codex", ...env }, argv, "linux");
@@ -151,5 +152,55 @@ describe("Codex output", () => {
     expect(failureFromExit(1, "something else")).toBe("codex_generation_failed");
     expect(safeCode(new Error("generation_timeout"))).toBe("generation_timeout");
     expect(safeCode(new Error("ENOENT: /home/a/secret"))).toBe("generation_failed");
+  });
+});
+
+describe("Codex allowance and per-task models", () => {
+  it("reads the allowance through app-server only, with no thread or message", () => {
+    const args = appServerArgs();
+    expect(args.at(-1)).toBe("app-server");
+    expect(args).not.toContain("exec");
+    expect(args).not.toContain("--model");
+    expect(args).toContain('forced_login_method="chatgpt"');
+    expect(appServerInitialize()).toMatchObject({ method: "initialize", id: 0 });
+    expect(appServerRequests().map(request => request.method)).toEqual(["initialized", "account/rateLimits/read", "model/list"]);
+  });
+  it("keeps the Codex bucket's windows, plan and whether a limit was reached", () => {
+    const window = (usedPercent, windowDurationMins, resetsAt) => ({ usedPercent, windowDurationMins, resetsAt });
+    expect(parseRateLimits({ rateLimits: { limitId: "codex", primary: window(25, 300, 1_800_000_000), secondary: window(40.25, 10080, 1_800_500_000), rateLimitReachedType: null, planType: "plus" } }))
+      .toEqual({ planType: "plus", primary: { usedPercent: 25, windowMinutes: 300, resetsAt: 1_800_000_000 }, secondary: { usedPercent: 40.3, windowMinutes: 10080, resetsAt: 1_800_500_000 }, reached: false, hasCredits: null });
+    const both = parseRateLimits({ rateLimits: { primary: window(1, 300, 1) }, rateLimitsByLimitId: { codex: { primary: window(97, 300, 2), secondary: null, rateLimitReachedType: "primary", credits: { hasCredits: true } } } });
+    expect(both).toMatchObject({ primary: { usedPercent: 97 }, secondary: null, reached: true, hasCredits: true });
+    expect(parseRateLimits({ rateLimits: { primary: window(130, 300, 2) } }).primary.usedPercent).toBe(100);
+    for (const bad of [null, [], {}, { rateLimits: null }, { rateLimits: { primary: { usedPercent: "x" } } }, { rateLimits: { primary: window(-1, 300, 1) } }]) expect(parseRateLimits(bad)).toBeNull();
+    expect(parseRateLimits({ rateLimits: { primary: { usedPercent: 5, windowDurationMins: "300", resetsAt: -1 }, planType: "bad plan!" } }))
+      .toEqual({ planType: null, primary: { usedPercent: 5, windowMinutes: null, resetsAt: null }, secondary: null, reached: false, hasCredits: null });
+  });
+  it("lists offered models with the efforts each supports", () => {
+    const models = parseModels({ data: [
+      { id: "gpt-6.1-sol", model: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", hidden: false, isDefault: true, defaultReasoningEffort: "medium",
+        supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "medium" }, { reasoningEffort: "ultra" }] },
+      { model: "gpt-6-luna", displayName: "Luna\u0007", supportedReasoningEfforts: ["low", "low"] },
+      { model: "hidden-one", hidden: true }, { model: "bad model" }, { model: "gpt-6.1-sol" }, null,
+    ] });
+    expect(models).toEqual([
+      { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", isDefault: true, efforts: ["low", "medium"], defaultEffort: "medium" },
+      { id: "gpt-6-luna", name: "Luna", isDefault: false, efforts: ["low"], defaultEffort: null },
+    ]);
+    expect(parseModels(null)).toEqual([]);
+  });
+  it("runs a task with the owner's model and effort, and ignores a malformed hint", () => {
+    const lease = { jobId: "job_1", leaseToken: "l".repeat(32), prompt: "p", outputSchema: { type: "object" } };
+    expect(validateClaim({ job: { ...lease, model: "gpt-6-luna", reasoning: "medium" } })).toMatchObject({ model: "gpt-6-luna", reasoning: "medium" });
+    expect(validateClaim({ job: { ...lease, model: "bad model;", reasoning: "max" } })).toMatchObject({ model: null, reasoning: null });
+    const config = posix({ ABORDER_CODEX_MODEL: "gpt-5.5-codex", ABORDER_CODEX_REASONING: "low" });
+    const hinted = execArgs(config, "/tmp/job-1", { model: "gpt-6-luna", reasoning: "high" });
+    expect(hinted[hinted.indexOf("--model") + 1]).toBe("gpt-6-luna");
+    expect(hinted).toContain('model_reasoning_effort="high"');
+    const plain = execArgs(config, "/tmp/job-1", { model: null, reasoning: null });
+    expect(plain[plain.indexOf("--model") + 1]).toBe("gpt-5.5-codex");
+    expect(plain).toContain('model_reasoning_effort="low"');
+    expect(execArgs(config, "/tmp/job-1", { reasoning: "max" })).toContain('model_reasoning_effort="low"');
+    expect(LIMITS.appServerBytes).toBeGreaterThan(LIMITS.apiResponseBytes);
   });
 });

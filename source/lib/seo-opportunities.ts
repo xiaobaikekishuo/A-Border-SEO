@@ -71,21 +71,16 @@ export async function getContentDecay(siteId: string, limit = 20, coverage = get
   previous.start.setUTCDate(previous.start.getUTCDate() - 28);
   previous.end = new Date(current.start.getTime() - 1);
 
+  // Summed per URL in Postgres: one row per page leaves the database, not one per page and day.
   const [currPages, prevPages] = await Promise.all([
-    db.page.findMany({
-      where: { siteId, date: { gte: current.start, lte: current.end } },
-      select: { url: true, clicks: true, impressions: true },
-    }),
-    db.page.findMany({
-      where: { siteId, date: { gte: previous.start, lte: previous.end } },
-      select: { url: true, clicks: true },
-    }),
+    db.page.groupBy({ by: ["url"], where: { siteId, date: { gte: current.start, lte: current.end } }, _sum: { clicks: true } }),
+    db.page.groupBy({ by: ["url"], where: { siteId, date: { gte: previous.start, lte: previous.end } }, _sum: { clicks: true } }),
   ]);
 
   const curr = new Map<string, number>();
   const prev = new Map<string, number>();
-  for (const p of currPages) curr.set(p.url, (curr.get(p.url) || 0) + p.clicks);
-  for (const p of prevPages) prev.set(p.url, (prev.get(p.url) || 0) + p.clicks);
+  for (const p of currPages) curr.set(p.url, p._sum.clicks ?? 0);
+  for (const p of prevPages) prev.set(p.url, p._sum.clicks ?? 0);
 
   const rows: {
     url: string;
@@ -110,19 +105,18 @@ export async function getContentDecay(siteId: string, limit = 20, coverage = get
 export async function getCannibalization(siteId: string, limit = 20, coverage = getGscCoverage(siteId)) {
   if (!(await coverage).queryPagesComplete) return [];
   const r = range(28);
-  const rows = await db.queryPage.findMany({
-    where: {
-      siteId,
-      date: { gte: r.start, lte: r.end },
-    },
-    select: {
-      query: true,
-      page: true,
-      clicks: true,
-      impressions: true,
-      position: true,
-    },
-  });
+  // Summed per query and page in Postgres, and only for queries that reach two
+  // or more pages: the daily rows of a large site never leave the database.
+  const rows = await db.$queryRaw<{ query: string; page: string; clicks: number; impressions: number; weightedPos: number }[]>`
+    SELECT query, page, clicks, impressions, "weightedPos" FROM (
+      SELECT query, page, SUM(clicks)::float8 AS clicks, SUM(impressions)::float8 AS impressions,
+        SUM(position * GREATEST(impressions, 1))::float8 AS "weightedPos",
+        COUNT(*) OVER (PARTITION BY query) AS "pageCount"
+      FROM "QueryPage"
+      WHERE "siteId" = ${siteId} AND date >= ${r.start} AND date <= ${r.end} AND page <> ''
+      GROUP BY query, page
+    ) grouped
+    WHERE "pageCount" >= 2`;
 
   type Agg = {
     page: string;
@@ -133,19 +127,9 @@ export async function getCannibalization(siteId: string, limit = 20, coverage = 
   const byQuery = new Map<string, Map<string, Agg>>();
 
   for (const row of rows) {
-    if (!row.page) continue;
     if (!byQuery.has(row.query)) byQuery.set(row.query, new Map());
-    const pages = byQuery.get(row.query)!;
-    const cur = pages.get(row.page) || {
-      page: row.page,
-      clicks: 0,
-      impressions: 0,
-      weightedPos: 0,
-    };
-    cur.clicks += row.clicks;
-    cur.impressions += row.impressions;
-    cur.weightedPos += row.position * Math.max(row.impressions, 1);
-    pages.set(row.page, cur);
+    byQuery.get(row.query)!.set(row.page, { page: row.page, clicks: Number(row.clicks),
+      impressions: Number(row.impressions), weightedPos: Number(row.weightedPos) });
   }
 
   const result: {

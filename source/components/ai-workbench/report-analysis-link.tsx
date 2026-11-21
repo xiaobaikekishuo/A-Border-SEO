@@ -11,6 +11,7 @@ const labels: Record<ActionScope, [string, string]> = {
   performance: ["Analyze page performance with ChatGPT", "用 ChatGPT 分析网页性能"],
   geo: ["Analyze GEO evidence with ChatGPT", "用 ChatGPT 分析 GEO 数据"],
   alerts: ["Review alerts with ChatGPT", "用 ChatGPT 分析告警"],
+  rankings: ["Review ranking changes with ChatGPT", "用 ChatGPT 复盘排名变化"],
 };
 
 export function ReportAnalysisLink({ siteId, scope, t }: { siteId: string; scope: ActionScope; t: Translator }) {

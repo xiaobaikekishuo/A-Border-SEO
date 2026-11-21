@@ -25,6 +25,7 @@ vi.mock("@/components/sites/geo-platforms", () => ({ default: () => <div>Platfor
 vi.mock("@/components/sites/geo-tracking", () => ({ default: () => <div>Prompt tracking</div> }));
 vi.mock("@/components/sites/geo-reports", () => ({ default: () => <div>Official reports</div> }));
 vi.mock("@/components/sites/geo-observations", () => ({ default: () => <div>Traffic observations</div> }));
+vi.mock("@/components/research/manus-research-panel", () => ({ ManusResearchPanel: () => <div>Manus citation sources</div> }));
 
 import GeoPage from "./page";
 import type { GeoReadiness } from "@/lib/geo/readiness";
@@ -87,9 +88,10 @@ describe("GEO report streaming", () => {
       expect(html).not.toContain("75/100");
 
       readiness.resolve({
-        version: 2, date: "2026-11-15", total: 20, sampled: 10,
+        version: 3, date: "2026-11-15", total: 20, sampled: 10,
         sampling: "GSC_IMPRESSIONS", rankedPages: 8, score: 75,
         checks: [{ key: "SNIPPET", passed: 7, applicable: 10 }],
+        entity: { status: null, organization: false, logo: false, sameAs: 0, contact: false, url: null },
       });
       await finished.promise;
       expect(errors).toEqual([]);

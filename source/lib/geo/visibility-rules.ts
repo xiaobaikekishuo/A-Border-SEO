@@ -10,6 +10,8 @@
  * cited host is one of its domains or a subdomain of one.
  */
 
+import { rateInterval } from "./stats";
+
 export type BrandEntity = { name: string; aliases: string[]; domains: string[] };
 export type TrackingBrands = { own: BrandEntity; competitors: BrandEntity[] };
 export type Citation = { url: string; domain: string; title: string | null; rank: number };
@@ -78,6 +80,13 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * A letter or digit of a script that separates words with spaces. A Latin
+ * name next to Chinese or Japanese text ("推荐Kammak的沙发") still stands on
+ * its own; next to more Latin letters ("Kammakhome") it does not.
+ */
+export const WORD_CHAR = "(?:(?![\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}])[\\p{L}\\p{N}])";
+
 /** How often any of `names` appears, and where first. */
 export function countMentions(text: string, names: readonly string[]): { count: number; first: number } {
   let count = 0;
@@ -86,7 +95,7 @@ export function countMentions(text: string, names: readonly string[]): { count: 
     const name = raw.trim();
     if (name.length < 2) continue;
     const body = escapeRegex(name).replace(/\s+/g, "\\s+");
-    const pattern = CJK.test(name) ? new RegExp(body, "giu") : new RegExp(`(?<![\\p{L}\\p{N}])${body}(?![\\p{L}\\p{N}])`, "giu");
+    const pattern = CJK.test(name) ? new RegExp(body, "giu") : new RegExp(`(?<!${WORD_CHAR})${body}(?!${WORD_CHAR})`, "giu");
     for (const m of text.matchAll(pattern)) {
       count++;
       if (first < 0 || (m.index ?? 0) < first) first = m.index ?? 0;
@@ -121,6 +130,8 @@ export function analyzeAnswer(text: string, citations: readonly Citation[], bran
 }
 
 export type AnswerRow = {
+  /** The prompt answered; answers to one prompt count as one observation in the ranges (lib/geo/stats.ts). */
+  promptId?: string;
   platform: string;
   status: "OK" | "NO_ANSWER" | "FAILED";
   ownMentioned: boolean;
@@ -143,6 +154,11 @@ export type PlatformVisibility = {
   avgMentionRank: number | null;
   /** The brand's share of the answers naming any tracked brand, counted once per answer. */
   shareOfVoice: number | null;
+  /** Distinct prompts among the answers: the observations the ranges count. */
+  prompts: number;
+  /** 95% ranges of the two rates, counting prompts (lib/geo/stats.ts). */
+  mentionRange: { low: number; high: number } | null;
+  citationRange: { low: number; high: number } | null;
   competitors: { name: string; mentioned: number; cited: number }[];
   topDomains: { domain: string; count: number; own: boolean }[];
   ownPages: { url: string; count: number }[];
@@ -163,12 +179,19 @@ export function summarizeVisibility(rows: readonly AnswerRow[], brands: Tracking
     }
   }
   const isOwn = (domain: string) => brands.own.domains.some(d => domainMatches(domain, d));
+  const mentionRate = ok.length ? round(ok.filter(r => r.ownMentioned).length / ok.length) : null;
+  const citationRate = ok.length ? round(ok.filter(r => r.ownCited).length / ok.length) : null;
+  // A row without a prompt id counts as a prompt of its own.
+  const prompts = new Set(ok.map((r, i) => r.promptId ?? `#${i}`)).size;
   return {
     answers: ok.length,
     noAnswer: rows.filter(r => r.status === "NO_ANSWER").length,
     failed: rows.filter(r => r.status === "FAILED").length,
-    mentionRate: ok.length ? round(ok.filter(r => r.ownMentioned).length / ok.length) : null,
-    citationRate: ok.length ? round(ok.filter(r => r.ownCited).length / ok.length) : null,
+    mentionRate,
+    citationRate,
+    prompts,
+    mentionRange: rateInterval(mentionRate, prompts),
+    citationRange: rateInterval(citationRate, prompts),
     avgCitationRank: mean(ok.flatMap(r => (r.ownRank ? [r.ownRank] : []))),
     avgMentionRank: mean(ok.flatMap(r => (r.mentionRank ? [r.mentionRank] : []))),
     shareOfVoice: named.length ? round(named.filter(r => r.ownMentioned).length / named.reduce((sum, r) => sum + r.mentions.length, 0)) : null,

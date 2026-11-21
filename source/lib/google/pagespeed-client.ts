@@ -3,6 +3,8 @@ export type { PageSpeedErrorCode } from "./pagespeed-errors";
 import { db } from "@/lib/db";
 import { decrypt } from "@/lib/encryption";
 import { googleFetch } from "./google-fetch";
+import { parseFieldVitals, type FieldResponse, type FieldVitals } from "./pagespeed-field";
+export { assessCoreWebVitals, GOOD_VITALS, parseFieldVitals, type FieldVitals, type VitalsAssessment } from "./pagespeed-field";
 
 const PAGESPEED_API_BASE = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
 
@@ -16,6 +18,7 @@ async function resolveApiKey(userId?: string): Promise<string | undefined> {
   return process.env.GOOGLE_PAGESPEED_KEY;
 }
 
+/** Lab values from Lighthouse. Lighthouse does not interact with the page, so `inp` stays empty; see `field`. */
 export interface CoreWebVitals {
   lcp?: number; // Largest Contentful Paint (seconds)
   fid?: number; // First Input Delay (milliseconds) - deprecated
@@ -28,6 +31,7 @@ export interface PerformanceMetrics {
   speedIndex?: number; // seconds
   ttfb?: number; // Time to First Byte (seconds)
   fcp?: number; // First Contentful Paint (seconds)
+  tbt?: number; // Total Blocking Time (milliseconds), the lab stand-in for INP
 }
 
 export interface PageSpeedResult {
@@ -36,6 +40,8 @@ export interface PageSpeedResult {
   lighthouseScore: number;
   vitals: CoreWebVitals;
   metrics: PerformanceMetrics;
+  /** Chrome UX Report p75 of real visits (last 28 days), or null when Chrome has too few. */
+  field: FieldVitals | null;
   fetchTime: string;
 }
 
@@ -89,7 +95,7 @@ export async function fetchPageSpeed(
     throw new PageSpeedError(response.status, code);
   }
 
-  const data = (await response.json()) as {
+  const data = (await response.json()) as FieldResponse & {
     lighthouseResult?: {
       categories?: {
         performance?: {
@@ -128,6 +134,7 @@ export async function fetchPageSpeed(
     speedIndex: msToSeconds(audits["speed-index"]?.numericValue),
     ttfb: msToSeconds(audits["server-response-time"]?.numericValue),
     fcp: msToSeconds(audits["first-contentful-paint"]?.numericValue),
+    tbt: audits["total-blocking-time"]?.numericValue,
   };
 
   return {
@@ -136,6 +143,7 @@ export async function fetchPageSpeed(
     lighthouseScore: metrics.perfScore,
     vitals,
     metrics,
+    field: parseFieldVitals(data),
     fetchTime: new Date().toISOString(),
   };
 }
@@ -155,19 +163,15 @@ export async function fetchPageSpeedBoth(
 }
 
 /**
- * Checks if Core Web Vitals are "good" (passing thresholds)
+ * Whether all three Core Web Vitals are "good": LCP <= 2.5 s, INP <= 200 ms,
+ * CLS <= 0.1. A missing metric is not a pass (a lab run never has INP), and
+ * a CLS of 0 is a measured, perfect value. For field data, use
+ * assessCoreWebVitals, which also tells "incomplete" from "failing".
  */
 export function isVitalsGood(vitals: CoreWebVitals): boolean {
-  // Good thresholds according to Google
-  // LCP: < 2.5s
-  // CLS: < 0.1
-  // INP: < 200ms
-
-  const lcpGood = vitals.lcp ? vitals.lcp < 2.5 : true;
-  const clsGood = vitals.cls ? vitals.cls < 0.1 : true;
-  const inpGood = vitals.inp ? vitals.inp < 200 : true;
-
-  return lcpGood && clsGood && inpGood;
+  return vitals.lcp != null && vitals.lcp <= 2.5 &&
+    vitals.cls != null && vitals.cls <= 0.1 &&
+    vitals.inp != null && vitals.inp <= 200;
 }
 
 /**

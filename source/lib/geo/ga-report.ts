@@ -12,6 +12,12 @@ export const MAX_REPORT_ROWS = 50_000;
 /** Aggregated day/platform/page rows a snapshot may keep (lib/geo/store.ts). */
 const MAX_SNAPSHOT_ROWS = 10_000;
 const dimensions = ["date", "hostName", "sessionSource", "landingPage"];
+/**
+ * Sessions, the engaged ones among them (longer than 10 seconds, a key event
+ * or two or more page views) and key events: whether AI referrals stay and
+ * convert, not only how many arrive.
+ */
+const metrics = ["sessions", "engagedSessions", "keyEvents"];
 const dateRange = z.object({ start: z.iso.date(), end: z.iso.date() });
 const gaFields = dateRange.extend({
   propertyId: z.string().regex(/^[1-9][0-9]{0,19}$/),
@@ -57,7 +63,7 @@ const cell = z.object({ value: z.string().optional() });
 const reportSchema = z.object({
   dimensionHeaders: z.array(z.object({name:z.string()})),
   metricHeaders: z.array(z.object({name:z.string()})),
-  rows: z.array(z.object({dimensionValues:z.array(cell).length(4),metricValues:z.array(cell).length(1)})).optional(),
+  rows: z.array(z.object({dimensionValues:z.array(cell).length(4),metricValues:z.array(cell).length(3)})).optional(),
   rowCount: z.number().int().nonnegative().optional(),
   metadata: z.object({
     timeZone:z.string().max(100).optional(), dataLossFromOtherRow:z.boolean().optional(),
@@ -73,7 +79,7 @@ function parseReportPage(body: unknown) {
   if (!parsed.success) throw problem("GA_RESPONSE", 502);
   const report = parsed.data;
   if (report.dimensionHeaders.map(h => h.name).join("|") !== dimensions.join("|") ||
-      report.metricHeaders.map(h => h.name).join("|") !== "sessions") throw problem("GA_RESPONSE", 502);
+      report.metricHeaders.map(h => h.name).join("|") !== metrics.join("|")) throw problem("GA_RESPONSE", 502);
   return report;
 }
 
@@ -94,10 +100,14 @@ export function summarizeGaPages(bodies: readonly unknown[], host: string, start
   for (const item of records) {
     const [date, hostname, source, page] = item.dimensionValues.map(d => d.value ?? "");
     const day = normalizeGeoDay(date);
-    const countText = item.metricValues[0].value ?? "";
-    if (!day || day < start || day > end || hostname.toLowerCase() !== host || !/^\d{1,10}$/.test(countText)) throw problem("GA_RESPONSE", 502);
+    const [countText, engagedText, keyEventsText] = item.metricValues.map(m => m.value ?? "");
+    if (!day || day < start || day > end || hostname.toLowerCase() !== host || !/^\d{1,10}$/.test(countText) || !/^\d{1,10}$/.test(engagedText)) throw problem("GA_RESPONSE", 502);
+    // Key events can be fractional when a key event is counted once per session.
+    if (!/^\d{1,10}(?:\.\d{1,6})?$/.test(keyEventsText)) throw problem("GA_RESPONSE", 502);
     const count = Number(countText);
-    if (count > 2147483647) throw problem("GA_LIMIT", 422);
+    const engaged = Number(engagedText);
+    const keyEvents = Number(keyEventsText);
+    if (count > 2147483647 || engaged > 2147483647 || keyEvents > 2147483647) throw problem("GA_LIMIT", 422);
     const platform = classifyAiSource(source);
     const path = normalizeGeoPath(page,host);
     if (!platform || !path) { skipped++; continue; }
@@ -105,8 +115,10 @@ export function summarizeGaPages(bodies: readonly unknown[], host: string, start
     const existing = sums.get(key);
     if (existing) {
       existing.count += count;
-      if (existing.count > 2147483647) throw problem("GA_LIMIT", 422);
-    } else sums.set(key,{day,platform,path,count});
+      existing.engaged = (existing.engaged ?? 0) + engaged;
+      existing.keyEvents = Math.round(((existing.keyEvents ?? 0) + keyEvents) * 100) / 100;
+      if (existing.count > 2147483647 || existing.engaged > 2147483647 || existing.keyEvents > 2147483647) throw problem("GA_LIMIT", 422);
+    } else sums.set(key,{day,platform,path,count,engaged,keyEvents:Math.round(keyEvents * 100) / 100});
   }
   if (sums.size > MAX_SNAPSHOT_ROWS) throw problem("GA_LIMIT", 422);
   const m = report.metadata;
@@ -171,7 +183,8 @@ export async function fetchGaSnapshot(req: z.infer<typeof gaRequest>, siteDomain
   try { host = new URL(siteDomain.includes("://") ? siteDomain : "https://" + siteDomain).hostname.toLowerCase(); }
   catch { throw problem("GA_SITE", 422); }
   const token = await exchangeCode(req.code, redirectUri, verifier);
-  const period = {dateRanges:[{startDate:req.start,endDate:req.end}],metrics:[{name:"sessions"}]};
+  const dateRanges = [{startDate:req.start,endDate:req.end}];
+  const period = {dateRanges,metrics:metrics.map(name => ({name}))};
   const hostFilter = {filter:{fieldName:"hostName",stringFilter:{matchType:"EXACT",value:host,caseSensitive:false}}};
   const query = {
     ...period, dimensions:dimensions.map(name => ({name})),
@@ -192,7 +205,7 @@ export async function fetchGaSnapshot(req: z.infer<typeof gaRequest>, siteDomain
   const snapshot = summarizeGaPages(pages,host,req.start,req.end,req.propertyId);
   if (!snapshot.processed) {
     const hostActivity = await runReport(req.propertyId,token,{
-      ...period,dimensions:[{name:"hostName"}],dimensionFilter:hostFilter,limit:"1"
+      dateRanges,metrics:[{name:"sessions"}],dimensions:[{name:"hostName"}],dimensionFilter:hostFilter,limit:"1"
     });
     const coverage = z.object({rows:z.array(z.object({dimensionValues:z.array(cell).length(1),metricValues:z.array(cell).length(1)})).length(1)}).safeParse(hostActivity);
     const row = coverage.success ? coverage.data.rows[0] : null;

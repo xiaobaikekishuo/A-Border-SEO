@@ -32,6 +32,8 @@ describe("brand mentions and citations", () => {
   it("counts Latin names on word boundaries and Chinese names anywhere", () => {
     expect(countMentions("Kammak, kammak and Kammakhome", ["Kammak"]).count).toBe(2);
     expect(countMentions("推荐卡玛克的沙发，卡玛克很好", ["卡玛克"]).count).toBe(2);
+    // Chinese answers often write Latin names without spaces around them.
+    expect(countMentions("推荐Kammak的沙发，Kammak很好，不是Kammakhome", ["Kammak"]).count).toBe(2);
     expect(countMentions("nothing here", ["Kammak"])).toEqual({ count: 0, first: -1 });
   });
 

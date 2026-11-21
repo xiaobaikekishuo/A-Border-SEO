@@ -28,9 +28,11 @@ model User {
   settings      UserSettings?
   chatGptProfiles ChatGptProfile[]
   manusKeywordTasks ManusKeywordTask[]
+  manusResearchTasks ManusResearchTask[]
   desktopOAuthAttempts DesktopOAuthAttempt[]
   managedIdentity ManagedIdentity?
   hostedDevices HostedDevice[]
+  aiPoolSetting AiPoolSetting?
 }
 
 model Account {
@@ -206,6 +208,9 @@ model Site {
   alerts        Alert[]
   savedKeywords SavedKeyword[]
   rankSnapshots RankSnapshot[]
+  rankTracking  RankTracking?
+  rankRuns      RankRun[]
+  rankChecks    RankCheck[]
   bingDaily     BingDaily[]
   bingWeekly    BingSearchWeekly[]
   jobs          Job[]
@@ -213,12 +218,18 @@ model Site {
   contentClusters ContentCluster[]
   contentPlanJobs ContentPlanJob[]
   aiWorkbenchJobs AiWorkbenchJob[]
+  aiReportSchedule AiReportSchedule?
+  aiAutomation AiAutomation?
+  aiBacklogItems AiBacklogItem[]
   geoSnapshots GeoSnapshot[]
   geoTracking  GeoTracking?
   geoPrompts   GeoPrompt[]
   geoRuns      GeoRun[]
   geoAnswers   GeoAnswer[]
+  indexNow     IndexNowState?
+  trustedSources TrustedSource[]
   manusKeywordTasks ManusKeywordTask[]
+  manusResearchTasks ManusResearchTask[]
 
   @@unique([userId, domain])
 }
@@ -244,6 +255,111 @@ model ManusKeywordTask {
 
   @@unique([userId, siteId, requestId])
   @@index([userId, siteId, createdAt, id])
+}
+
+/// The weekly AI action list of a site (lib/ai-workbench/weekly-report.ts):
+/// from each Monday 00:00 UTC, the owner's local Codex worker writes it on its
+/// next poll, and it goes to the owner's alert email and webhook.
+model AiReportSchedule {
+  siteId    String    @id
+  enabled   Boolean   @default(false)
+  language  String    @default("zh-CN")
+  lastSlot  DateTime? // the Monday 00:00 UTC of the last week handled
+  lastJobId String?
+  updatedAt DateTime  @updatedAt
+  site      Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+}
+
+/// Background Codex work of a user (lib/ai-workbench/pool): off until turned on.
+model AiPoolSetting {
+  userId         String   @id
+  enabled        Boolean  @default(false)
+  shortReserve   Int      @default(30) // percent of the short (5-hour) window kept for tasks the user starts
+  weeklyReserve  Int      @default(10) // percent of the weekly allowance background tasks never use
+  reviewCap      Int      @default(20) // background results waiting for review before the pool pauses
+  language       String   @default("zh-CN")
+  lightModel     String?
+  lightReasoning String?  @default("low")
+  mainModel      String?
+  mainReasoning  String?  @default("medium")
+  updatedAt      DateTime @updatedAt
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// What fills a site's background pool (lib/ai-workbench/pool/fill.ts).
+model AiAutomation {
+  siteId      String    @id
+  rankings    Boolean   @default(false) // review a rank check with notable moves
+  alerts      Boolean   @default(false) // diagnose newly fired alerts
+  meta        Boolean   @default(false) // rewrite titles and descriptions when low-CTR pages change
+  schema      Boolean   @default(false) // structured data for crawled pages without any, new pages first
+  clusters    Boolean   @default(false) // monthly search query clusters
+  briefs      Boolean   @default(false) // briefs for planned topics without one
+  // Tasks of each kind started automatically per site per UTC day (1.9.1).
+  rankingsCap Int       @default(2)
+  alertsCap   Int       @default(2)
+  metaCap     Int       @default(1)
+  schemaCap   Int       @default(10)
+  clustersCap Int       @default(1)
+  briefsCap   Int       @default(5)
+  alertsScope String    @default("drops") // drops: traffic and ranking drops only; all: every alert
+  markers     Json      @default("{}")    // what the fillers have already seen
+  status      Json      @default("{}")    // each filler's last check: when, what it found, what it queued
+  filledAt    DateTime?
+  updatedAt   DateTime  @updatedAt
+  site        Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+}
+
+/// One piece of background work: becomes a workbench task when the worker is idle and the allowance allows.
+model AiBacklogItem {
+  id         String          @id @default(cuid())
+  siteId     String
+  source     String          // RANKINGS, ALERTS, META, SCHEMA, CLUSTERS, BRIEF, BATCH
+  kind       String          // the workbench task kind it becomes
+  title      String
+  payload    Json
+  dedupeKey  String
+  priority   Int
+  status     String          @default("PENDING") // PENDING, STARTED, SKIPPED, CANCELED
+  jobId      String?         @unique
+  reason     String?
+  reviewedAt DateTime?
+  createdAt  DateTime        @default(now())
+  startedAt  DateTime?
+  updatedAt  DateTime        @updatedAt
+  site       Site            @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  job        AiWorkbenchJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  @@unique([siteId, dedupeKey])
+  @@index([status, priority, createdAt])
+  @@index([siteId, createdAt])
+}
+
+/// A Manus task from a research template other than keyword research
+/// (lib/manus/research.ts): GEO citation sources or link prospects. Its
+/// result comes back as structured rows (Manus API v2 structured output).
+model ManusResearchTask {
+  id        String   @id @default(cuid())
+  userId    String
+  siteId    String
+  requestId String
+  kind      String   // GEO_SOURCES or LINK_PROSPECTS
+  input     Json
+  status    String   // submitting, unknown, pending, running, waiting, completed, failed
+  remoteId  String?
+  taskUrl   String?
+  summary   String?
+  rows      Json     @default("[]")
+  /// Whether Manus extracted the structured result: null until the task finished.
+  extracted Boolean?
+  errorCode String?
+  revision  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, siteId, requestId])
+  @@index([userId, siteId, kind, createdAt, id])
 }
 
 model ManusKeywordPreview {
@@ -276,6 +392,8 @@ model GeoTracking {
   platforms    String[] // GeoPlatformId values asked through DataForSEO
   scheduleDays Int?     // null: runs only when started by hand
   budgetUsd    Float    @default(1)
+  samples      Int      @default(1) // answers asked per prompt and platform in one run (1-5)
+  facts        Json?    // brand fact card: [{label, value}], checked against answers
   updatedAt    DateTime @updatedAt
   site         Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
 }
@@ -331,14 +449,51 @@ model GeoAnswer {
   meta      Json?     // model, sources consulted, fan-out queries, organic rank
   costUsd   Float     @default(0)
   error     String?
+  sample    Int       @default(0) // 0-based answer number within a run (GeoTracking.samples)
+  review    Json?     // reviewer labels: {accuracy, sentiment, note, reviewedAt}
   createdAt DateTime  @default(now())
   site      Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
   run       GeoRun?   @relation(fields: [runId], references: [id], onDelete: Cascade)
   prompt    GeoPrompt @relation(fields: [promptId], references: [id], onDelete: Cascade)
 
-  @@unique([runId, promptId, platform])
+  @@unique([runId, promptId, platform, sample])
   @@index([siteId, createdAt])
   @@index([promptId, platform, createdAt])
+}
+
+// ============ INDEXNOW ============
+
+// One site's IndexNow key and the result of the last submission
+// (lib/indexnow/indexnow.ts). The key is public by design: it is served
+// at https://<domain>/<key>.txt so search engines can verify submissions.
+// External pages an AI draft of this site may cite (lib/ai-workbench/trusted-sources.ts).
+// Exact pages, not whole domains: a draft cannot open pages to check a deep link.
+model TrustedSource {
+  id         String    @id @default(cuid())
+  siteId     String
+  url        String    // normalized: http(s), no fragment or tracking parameters
+  title      String?
+  note       String?
+  checkedAt  DateTime? // when the owner last had the page fetched
+  lastStatus Int?      // HTTP status of that fetch; null when it could not be reached
+  createdAt  DateTime  @default(now())
+  site       Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([siteId, url])
+  @@index([siteId, createdAt])
+}
+
+model IndexNowState {
+  siteId          String    @id
+  key             String
+  verifiedAt      DateTime? // when the key file last answered with the key
+  lastSubmittedAt DateTime?
+  lastStatus      Int?      // HTTP status IndexNow answered with
+  lastCount       Int?      // URLs in the last submission
+  lastMessage     String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  site            Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
 }
 
 enum ContentFunnel {
@@ -442,6 +597,11 @@ model ContentPlanJob {
 model ContentWorkerState {
   id String @id
   lastSeenAt DateTime @default(now())
+  limits Json?        // the worker's last reading of its Codex allowance (lib/ai-workbench/pool/limits.ts)
+  limitsAt DateTime?  // when it was read
+  limitsError String? // why the last reading failed, if it did
+  models Json?        // models this Codex account offers, for per-task routing
+  capabilities String[] @default([]) // "routing-v1": takes a model and reasoning effort per task
 }
 
 model ChatGptHost {
@@ -508,6 +668,7 @@ model AiWorkbenchJob {
   finishedAt DateTime?
   site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
   appInference ChatGptInference?
+  backlogItem AiBacklogItem?
   @@index([siteId, createdAt])
   @@index([status, createdAt])
 }
@@ -603,6 +764,8 @@ model SavedKeyword {
   siteId    String
   query     String
   notes     String?
+  /// Checked by rank tracking (lib/rank-tracking): its measured Google position.
+  tracked   Boolean  @default(false)
   createdAt DateTime @default(now())
 
   site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
@@ -628,6 +791,78 @@ model RankSnapshot {
   @@unique([siteId, query, date])
   @@index([siteId, date])
   @@index([siteId, query, date])
+}
+
+/// Rank tracking settings of a site (lib/rank-tracking/tracking.ts): how its
+/// tracked saved keywords are checked on Google through DataForSEO's standard
+/// queue, how often, and the most one run may spend. The market is the site's
+/// research market.
+model RankTracking {
+  siteId       String   @id
+  device       String   @default("desktop") // desktop or mobile
+  depth        Int      @default(30)        // results read per keyword, billed per page of 10
+  aiOverview   Boolean  @default(false)     // also load Google's AI Overview (extra charge per keyword)
+  scheduleDays Int?     // null: runs only when started by hand
+  budgetUsd    Float    @default(1)
+  updatedAt    DateTime @updatedAt
+  site         Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+}
+
+/// One rank check run: its tasks are posted to DataForSEO's standard queue,
+/// then collected by later jobs (lib/rank-tracking/job.ts) until all are back.
+model RankRun {
+  id         String      @id @default(cuid())
+  siteId     String
+  jobId      String?     @unique // the job that posts it; a retry of that job resumes the run
+  source     String      // manual or schedule
+  status     String      // POSTING, WAITING, SUCCEEDED, PARTIAL, FAILED
+  device     String
+  depth      Int
+  aiOverview Boolean     @default(false)
+  language   String
+  location   Int
+  planned    Int
+  done       Int         @default(0)
+  failed     Int         @default(0)
+  costUsd    Float       @default(0)
+  budgetUsd  Float
+  error      String?
+  errorCode  String?
+  startedAt  DateTime    @default(now())
+  postedAt   DateTime?
+  finishedAt DateTime?
+  site       Site        @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  checks     RankCheck[]
+
+  @@index([siteId, startedAt])
+}
+
+/// One keyword checked in one run: where the site ranks in Google's organic
+/// results, which page ranks, and the first ten results.
+model RankCheck {
+  id         String    @id @default(cuid())
+  siteId     String
+  runId      String
+  keyword    String    // the saved keyword's text when the run started
+  remoteId   String?   // DataForSEO task id, once posted
+  status     String    // QUEUED (not posted yet), PENDING (posted), OK, FAILED
+  position   Int?      // organic rank (rank_group) of the site's first result; null: not within depth
+  absolute   Int?      // rank_absolute: counting every element on the results page
+  url        String?   // the site's page at that position
+  aiOverview Boolean?  // the results page showed an AI Overview; null: unknown
+  aiCited    Boolean?  // the AI Overview cites the site; null: not loaded
+  features   String[]  // other result types on the page (featured_snippet, people_also_ask, ...)
+  top        Json      @default("[]") // first ten organic results: [{rank, domain, url, title}]
+  costUsd    Float     @default(0)
+  error      String?
+  checkedAt  DateTime? // when Google's results were read
+  createdAt  DateTime  @default(now())
+  run        RankRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  site       Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, keyword])
+  @@index([siteId, keyword, createdAt])
+  @@index([remoteId])
 }
 
 // ============ CRAWLER ============
@@ -709,6 +944,9 @@ model AuditPage {
   // Robots-type meta tags ([name, content], robots/googlebot/bingbot/msnbot)
   // and whether a data-nosnippet attribute is present; null on older crawls.
   robotsDirectives Json?
+  // GEO readiness evidence (lib/crawler/geo-signals.ts): cited sources,
+  // app-shell detection and declared dates; null on older crawls.
+  geoSignals      Json?
 
   crawl           Crawl   @relation(fields: [crawlId], references: [id], onDelete: Cascade)
 
@@ -765,6 +1003,7 @@ enum IssueType {
   SLOW_PAGE             // Load time > 3s
   MIXED_CONTENT         // HTTP resources on HTTPS page
   LARGE_PAGE            // Page size > 3MB
+  HREFLANG              // Invalid codes, missing self or return links, alternates that redirect
 }
 
 enum IssueSeverity {
@@ -792,6 +1031,15 @@ model VitalsReport {
   perfScore   Int?     // 0-100 Lighthouse performance score
   speedIndex  Float?   // Speed Index (seconds)
   ttfb        Float?   // Time to First Byte (seconds)
+  tbt         Float?   // Total Blocking Time (milliseconds, lab); Lighthouse cannot measure INP
+
+  // Field data: Chrome UX Report p75 over the last 28 days, from the same
+  // PageSpeed Insights response. Null when Chrome has too few visits.
+  fieldSource   String? // URL (this page) or ORIGIN (the whole site, as a fallback)
+  fieldLcp      Float?  // seconds
+  fieldInp      Float?  // milliseconds
+  fieldCls      Float?  // score
+  fieldCategory String? // FAST, AVERAGE or SLOW, as PageSpeed Insights reports it
 
   site        Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
 
@@ -823,6 +1071,7 @@ enum AlertType {
   VITALS_DEGRADED    // Core Web Vitals got worse
   CRAWL_ISSUES       // New crawl issues detected
   NOINDEX_SITEWIDE   // Most fetched pages of the latest crawl are noindex
+  RANK_DROP          // A tracked keyword fell X places or off the first page in the latest rank check
 }
 
 enum AlertChannel {

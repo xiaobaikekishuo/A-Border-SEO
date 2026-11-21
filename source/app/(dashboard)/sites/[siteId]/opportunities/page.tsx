@@ -6,6 +6,7 @@ import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { getAllOpportunities } from "@/lib/seo-opportunities";
 import { PageHeader } from "@/components/ui/page-header";
+import { MetaRewritePanel } from "@/components/ai-workbench/meta-rewrite-panel";
 import { EmptyState } from "@/components/ui/empty-state";
 import { CsvExportButton } from "@/components/ui/csv-export-button";
 import { PositionBadge, NumCell, CtrCell } from "@/components/ui/data-table";
@@ -13,23 +14,26 @@ import { cn } from "@/lib/utils";
 import Link from "next/link";
 import { opportunityWorkbenchHref } from "@/components/ai-workbench/opportunity-link";
 import type { DiagnosticSelection } from "@/lib/ai-workbench/diagnostic-types";
+import { jobParam } from "@/lib/ai-workbench/job-link";
 
 interface Props {
   params: Promise<{ siteId: string }>;
+  searchParams: Promise<{ job?: string | string[] }>;
 }
 
-export default async function OpportunitiesPage({ params }: Props) {
+export default async function OpportunitiesPage({ params, searchParams }: Props) {
   const { t, locale } = await getI18n();
   const session = await auth();
   const { siteId } = await params;
 
   const site = await db.site.findUnique({
     where: { id: siteId },
-    select: { userId: true, domain: true, _count: { select: { keywords: true } } },
+    select: { userId: true, domain: true },
   });
   if (!site || site.userId !== session?.user?.id) redirect("/sites");
 
-  if (site._count.keywords === 0) {
+  // One stored keyword row is enough to know; counting them all took long on large sites.
+  if (!(await db.keyword.findFirst({ where: { siteId }, select: { id: true } }))) {
     return (
       <div>
         <PageHeader
@@ -48,6 +52,8 @@ export default async function OpportunitiesPage({ params }: Props) {
   }
 
   const data = await getAllOpportunities(siteId);
+  // ?job=: open that title rewrite's result (links from the background pool).
+  const job = jobParam((await searchParams).job);
 
   return (
     <div>
@@ -220,6 +226,7 @@ export default async function OpportunitiesPage({ params }: Props) {
           )}
         </Section>
       </div>
+      <div className="mt-6"><MetaRewritePanel key={`${siteId}:${job ?? ""}`} siteId={siteId} initialJobId={job} /></div>
     </div>
   );
 }

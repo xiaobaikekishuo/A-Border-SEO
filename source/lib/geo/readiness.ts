@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { metricWindow } from "@/lib/content-planner/data";
-import { evaluateGeoPage, GEO_READINESS_VERSION, summarizeGeoPages, type GeoCheckTotals, type GeoPageEvidence } from "./readiness-rules";
+import { evaluateGeoPage, evaluateSiteEntity, GEO_READINESS_VERSION, summarizeGeoPages, type GeoCheckTotals, type GeoPageEvidence, type SiteEntity } from "./readiness-rules";
 
 /** Pages read for one readiness summary. */
 export const READINESS_SAMPLE = 300;
@@ -18,11 +18,16 @@ export type GeoReadiness = {
   rankedPages: number;
   checks: GeoCheckTotals[];
   score: number | null;
+  /** The site-level entity check; not part of the page score. */
+  entity: SiteEntity;
 };
+
+/** Pages with business markup read for the entity check, at most. */
+const ENTITY_SAMPLE = 50;
 
 const pageSelect = {
   url: true, title: true, description: true, h1Count: true, wordCount: true, internalLinks: true,
-  articleText: true, articleHeadings: true, schemaReport: true,
+  articleText: true, articleHeadings: true, schemaReport: true, geoSignals: true,
 } as const;
 
 export async function getReadiness(db: PrismaClient, siteId: string): Promise<GeoReadiness | null> {
@@ -56,7 +61,23 @@ export async function getReadiness(db: PrismaClient, siteId: string): Promise<Ge
     select: pageSelect,
   }) : [];
   const pages = [...first, ...rest];
-  const { checks, score } = summarizeGeoPages(pages.map(evaluateGeoPage));
+  // Freshness is judged as of the crawl, so the score of one crawl does not drift by the day.
+  const asOf = crawl.finishedAt ?? new Date();
+  const { checks, score } = summarizeGeoPages(pages.map(page => evaluateGeoPage(page, asOf)));
+  // The entity markup usually sits on the home page or every page's template;
+  // read the pages that have any, the sampled ones or not.
+  const entityPages = await db.auditPage.findMany({
+    where: { crawlId: crawl.id, OR: [
+      { schemaReport: { path: ["signals", "organization"], equals: true } },
+      { schemaReport: { path: ["signals", "organizationLogo"], equals: true } },
+    ] },
+    orderBy: [{ url: "asc" }, { id: "asc" }],
+    take: ENTITY_SAMPLE,
+    select: { url: true, schemaReport: true },
+  }) as { url: string; schemaReport: unknown }[];
+  // Crawls from version 3 on save GEO evidence; before that the entity details were not recorded.
+  const judged = pages.some(page => page.geoSignals !== null && page.geoSignals !== undefined);
+  const entity = evaluateSiteEntity([...entityPages, ...pages], judged);
   return {
     version: GEO_READINESS_VERSION,
     date: crawl.finishedAt?.toISOString().slice(0, 10),
@@ -66,5 +87,6 @@ export async function getReadiness(db: PrismaClient, siteId: string): Promise<Ge
     rankedPages: first.length,
     checks,
     score,
+    entity,
   };
 }

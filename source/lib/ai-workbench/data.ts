@@ -13,16 +13,20 @@ import { hostedWorkerStatus, hostedRequestDeviceId } from "@/lib/hosted/worker";
 import { collectDiagnosticEvidence } from "./diagnostic";
 import { collectActionEvidence, actionEvidenceRevision } from "./action-evidence";
 import { reportSources, type ReportEvidence } from "./action-scope";
+import { reportContext } from "./report-context";
 import { buildReportWorkerClaim } from "./report-claim";
 import { assertKeywordRequest, buildKeywordContext } from "./keyword-research";
-import { assertResearchRequest, buildResearchContext, isResearchAnalysis, type ResearchEvidence, type ResearchKind } from "./research-analysis";
+import { assertResearchRequest, buildResearchContext, isResearchAnalysis, type ResearchEvidence } from "./research-analysis";
 import type { DiagnosticEvidence } from "./diagnostic-types";
+import { trustedSourcesFor } from "./trusted-sources";
 import { workbenchActionSchema, workbenchRequestSchema, workbenchResultSchema, type WorkbenchRequest, type WorkbenchWorkspace } from "./schema";
+import { assertToolRequest, buildToolContext, isPanelKind, isToolKind, PANEL_KINDS, type PanelKind } from "./tools";
 
 export type WorkbenchDb = PrismaClient;
 type Tx = Prisma.TransactionClient;
 const json = (value: unknown) => value as Prisma.InputJsonValue;
 export const CANCEL_MESSAGE = "Canceled by user. The local helper stops at its next heartbeat; already used quota is not refunded.";
+export const POOL_YIELD_MESSAGE = "Canceled by user: a task you started took the place of this background task, which waits in the pool again. Already used quota is not refunded.";
 export function expireWorkbenchJobs(db: WorkbenchDb | Tx, now: Date, siteId?: string, userId?: string) {
   return db.aiWorkbenchJob.updateMany({ where: { ...(siteId ? { siteId } : {}), ...(userId ? { site: { userId } } : {}), OR: [
     { status: "QUEUED", createdAt: { lte: new Date(now.getTime() - QUEUE_TIMEOUT_MS) } },
@@ -47,7 +51,13 @@ function diagnosticSnapshot(diagnostic: DiagnosticEvidence) {
     limitations: [...report.limitations, `Task snapshot includes ${Math.min(20, report.findings.length)} of ${report.findings.length} findings and ${Math.min(10, report.entities.length)} of ${report.entities.length} entities.`] } : report,
     page: page ? pageFacts as Omit<NonNullable<DiagnosticEvidence["page"]>, "body"> : null };
 }
+/** The evidence a task of this request is written from, saved with the task. */
+export async function buildWorkbenchContext(tx: Tx, site: { id: string; domain: string }, input: WorkbenchRequest, now = new Date()) {
+  return buildContext(tx, site, input, now);
+}
+
 async function buildContext(tx: Tx, site: { id: string; domain: string }, input: WorkbenchRequest, now = new Date()) {
+  if (isToolKind(input.kind)) return buildToolContext(tx, site, input, now);
   if (input.actionScope || input.evidenceRevision) {
     if (input.kind !== "SEO_FIX_PLAN" || !input.actionScope || !input.evidenceRevision || input.diagnosis || input.pageId || input.clusterId || input.body) {
       throw new ContentError("Invalid report evidence selection", 400);
@@ -55,9 +65,7 @@ async function buildContext(tx: Tx, site: { id: string; domain: string }, input:
     const reportEvidence = await collectActionEvidence(tx, { id: site.id, domain: site.domain }, input.actionScope, now);
     if (input.evidenceRevision !== actionEvidenceRevision(reportEvidence)) throw new ContentError("report_evidence_changed", 409);
     if (!reportEvidence.hasData) throw new ContentError("report_evidence_empty", 409);
-    const urls = reportEvidence.sections.flatMap(section => section.rows.map(row =>
-      typeof row.url === "string" && row.url.length <= 2048 ? sameSiteUrl(row.url, site.domain) : null));
-    return { domain: site.domain, reportEvidence, allowedInternalLinks: [...new Set(urls.filter((url): url is string => !!url))] };
+    return reportContext(site, reportEvidence);
   }
   if (isResearchAnalysis(input.kind)) return buildResearchContext(tx, site, input, now);
   if (input.kind === "KEYWORD_RESEARCH") return buildKeywordContext(tx, site, input);
@@ -85,6 +93,8 @@ async function buildContext(tx: Tx, site: { id: string; domain: string }, input:
   const evidenceUrls = [...new Set([page?.url, cluster?.url, diagnostic?.selection.url].filter((url): url is string => !!url))];
   const searchEvidence = await articleSearchEvidence(tx, site.id, evidenceUrls.length ? evidenceUrls : knownPages.slice(0, 8).map(p => p.url));
   const brief = briefSchema.safeParse(cluster?.brief);
+  // External pages the draft may cite; anything else it links to is marked for verification.
+  const trustedSources = await trustedSourcesFor(tx, site.id, [input.title, input.keyword, cluster?.title, cluster?.keyword].filter(Boolean).join(" "));
   const context = { domain: site.domain, body, bodySource: input.body ? "PASTED" : body ? "CRAWL" : "NONE",
     bodyEvidence: { source: input.body ? "PASTED" : body ? "CRAWL" : "NONE", characters: body.length, characterLimit: input.body ? 24000 : 12000, isExcerpt: !input.body && !!body, completeness: "UNKNOWN" },
     evidenceLimits: { queryCandidates: 50, auditIssues: 30, knownPages: 40, headings: 30, auditIssuesAtLimit: issues.length >= 30, knownPagesAtLimit: candidates.length >= 40 },
@@ -92,7 +102,7 @@ async function buildContext(tx: Tx, site: { id: string; domain: string }, input:
       headings: input.body ? [] : Array.isArray(page.articleHeadings) ? page.articleHeadings.filter((h): h is string => typeof h === "string").slice(0, 30).map(h => h.slice(0, 300)) : [] } : null,
     topic: cluster ? { title: cluster.title, keyword: cluster.keyword, funnel: cluster.funnel, intent: cluster.intent, pillar: cluster.pillar, brief: brief.success ? brief.data : null } : null,
     crawl: crawl ? { finishedAt: crawl.finishedAt?.toISOString() ?? null, sampleLimited: crawl.maxPages > 0 && crawl.pagesFound >= crawl.maxPages } : null,
-    knownPages, allowedInternalLinks: knownPages.map(p => p.url),
+    knownPages, allowedInternalLinks: knownPages.map(p => p.url), trustedSources,
     issues: issues.map(({ details, ...issue }) => ({ ...issue, type: auditIssueDisplayType({ ...issue, details: details as Record<string, unknown> | null }),
       disposition: unverified(details) ? "unverified" : "observed", message: issue.message.slice(0, 1000) })), searchEvidence,
     ...(diagnostic ? { diagnosis: diagnosticSnapshot(diagnostic) } : {}) };
@@ -100,18 +110,29 @@ async function buildContext(tx: Tx, site: { id: string; domain: string }, input:
   return context;
 }
 
-export async function getWorkbenchWorkspace(db: WorkbenchDb, userId: string | undefined | null, siteId: string, now = new Date(), kind?: "KEYWORD_RESEARCH" | ResearchKind): Promise<WorkbenchWorkspace> {
+const JOB_SELECT = { id: true, kind: true, title: true, status: true, createdAt: true, updatedAt: true, startedAt: true, finishedAt: true, error: true, draftText: true, result: true, context: true } as const;
+
+/**
+ * A site's workbench: crawled pages, topics, the latest 20 tasks (of one panel
+ * kind, or of the workbench's own kinds) and the worker. `includeJobId`: a
+ * task a link points at (?job=), listed too when it is older than those 20.
+ */
+export async function getWorkbenchWorkspace(db: WorkbenchDb, userId: string | undefined | null, siteId: string, now = new Date(), kind?: PanelKind, includeJobId?: string): Promise<WorkbenchWorkspace> {
   const site = await ownedSite(db, userId, siteId);
   await expireWorkbenchJobs(db, now, siteId);
   const crawl = await db.crawl.findFirst({ where: { siteId, status: "COMPLETED" }, orderBy: { finishedAt: "desc" }, select: { id: true } });
-  const [pages, clusters, jobs, worker, activeTask] = await Promise.all([
-    crawl ? db.auditPage.findMany({ where: { crawlId: crawl.id }, orderBy: { url: "asc" }, take: 150, select: { id: true, url: true, title: true, articleText: true } }) : [],
+  const kindWhere = kind ?? { notIn: [...PANEL_KINDS] };
+  const [pages, clusters, latest, worker, activeTask] = await Promise.all([
+    crawl ? db.auditPage.findMany({ where: { crawlId: crawl.id }, orderBy: { url: "asc" }, take: 150, select: { id: true, url: true, title: true, articleText: true, hasSchema: true } }) : [],
     db.contentCluster.findMany({ where: { siteId }, orderBy: { createdAt: "desc" }, take: 100, select: { id: true, title: true, keyword: true, url: true, pillar: { select: { title: true } } } }),
-    db.aiWorkbenchJob.findMany({ where: { siteId, kind: kind ?? { notIn: ["KEYWORD_RESEARCH", "DOMAIN_ANALYSIS", "BACKLINK_ANALYSIS"] } }, orderBy: { createdAt: "desc" }, take: 20, select: { id: true, kind: true, title: true, status: true, createdAt: true, updatedAt: true, startedAt: true, finishedAt: true, error: true, draftText: true, result: true, context: true } }),
+    db.aiWorkbenchJob.findMany({ where: { siteId, kind: kindWhere }, orderBy: { createdAt: "desc" }, take: 20, select: JOB_SELECT }),
     hostedWorkerStatus(db, userId!),
-    db.aiWorkbenchJob.findFirst({ where: { siteId, status: { in: ["QUEUED", "RUNNING"] } }, orderBy: { createdAt: "asc" }, select: { id: true, kind: true, title: true } }),
+    db.aiWorkbenchJob.findFirst({ where: { siteId, status: { in: ["QUEUED", "RUNNING"] } }, orderBy: { createdAt: "asc" }, select: { id: true, kind: true, title: true, backlogItem: { select: { id: true } } } }),
   ]);
-  return { site, activeTask, worker: { online: !!worker && now.getTime() - worker.lastSeenAt.getTime() < WORKER_ONLINE_MS, lastSeenAt: worker?.lastSeenAt.toISOString() ?? null },
+  const linked = includeJobId && !latest.some(job => job.id === includeJobId)
+    ? await db.aiWorkbenchJob.findFirst({ where: { id: includeJobId, siteId, kind: kindWhere }, select: JOB_SELECT }) : null;
+  const jobs = linked ? [...latest, linked] : latest;
+  return { site, activeTask: activeTask ? { id: activeTask.id, kind: activeTask.kind, title: activeTask.title, ...(activeTask.backlogItem ? { background: true } : {}) } : null, worker: { online: !!worker && now.getTime() - worker.lastSeenAt.getTime() < WORKER_ONLINE_MS, lastSeenAt: worker?.lastSeenAt.toISOString() ?? null },
     pages: pages.map(({ articleText, ...page }) => ({ ...page, hasBody: (articleText?.trim().length ?? 0) >= 100 })),
     clusters: clusters.map(({ pillar, ...cluster }) => ({ ...cluster, pillarTitle: pillar.title })),
     jobs: jobs.map(({ context, ...job }) => {
@@ -135,7 +156,9 @@ export async function runWorkbenchAction(db: WorkbenchDb, userId: string | undef
   }
   if (action.action === "start") {
     if (!managedAllows("codex")) throw new ContentError("managed_restricted", 403);
-    assertKeywordRequest(action); assertResearchRequest(action);
+    assertKeywordRequest(action); assertResearchRequest(action); assertToolRequest(action);
+    // Only the server marks the weekly action list it queues (lib/ai-workbench/weekly-report.ts).
+    if (action.schedule) throw new ContentError("Invalid settings for this task", 400);
   }
   let connectionEpoch: number | undefined;
   if (action.action === "start" && action.provider === "CHATGPT_APP" && !hostedMode()) {
@@ -149,7 +172,14 @@ export async function runWorkbenchAction(db: WorkbenchDb, userId: string | undef
     if (action.action === "start") {
       const worker = await tx.contentWorkerState.findFirst({ where: { ...(hostedDeviceId ? { id: `hosted:${hostedDeviceId}` } : {}), lastSeenAt: { gt: new Date(now.getTime() - WORKER_ONLINE_MS) } } });
       if (!worker) throw new ContentError("The local ChatGPT account worker is offline. Start the local content worker and sign in with ChatGPT.", 409);
-      if (await tx.aiWorkbenchJob.count({ where: { siteId, status: { in: ["QUEUED", "RUNNING"] } } })) throw new ContentError("This site already has an active workbench task", 409);
+      const active = await tx.aiWorkbenchJob.findFirst({ where: { siteId, status: { in: ["QUEUED", "RUNNING"] } }, select: { id: true, backlogItem: { select: { id: true } } } });
+      if (active && !active.backlogItem) throw new ContentError("This site already has an active workbench task", 409);
+      if (active?.backlogItem) {
+        // A background task gives way to one the owner starts, and waits in the pool again.
+        await tx.aiWorkbenchJob.updateMany({ where: { id: active.id, status: { in: ["QUEUED", "RUNNING"] } },
+          data: { status: "FAILED", error: POOL_YIELD_MESSAGE, activeKey: null, leaseToken: null, leaseExpiresAt: null, finishedAt: now, updatedAt: now } });
+        await tx.aiBacklogItem.update({ where: { id: active.backlogItem.id }, data: { status: "PENDING", jobId: null, startedAt: null, reason: "yielded" } });
+      }
       const { action: _action, connectionEpoch: _untrustedEpoch, ...requestInput } = action;
       const request = workbenchRequestSchema.parse({ ...requestInput, ...(hostedMode() ? { provider: "CODEX_LOCAL", profileId: undefined, model: undefined } : {}), ...(connectionEpoch !== undefined ? { connectionEpoch } : {}) });
       const context = await buildContext(tx, site, request, now);
@@ -169,7 +199,7 @@ export async function runWorkbenchAction(db: WorkbenchDb, userId: string | undef
       if (!changed.count) throw new ContentError("Only queued or running tasks can be canceled", 409);
       return { ok: true, updatedAt: now.toISOString() };
     }
-    if (job.kind === "KEYWORD_RESEARCH" || isResearchAnalysis(job.kind)) throw new ContentError("Research reports cannot be edited as article drafts", 409);
+    if (isPanelKind(job.kind)) throw new ContentError("Research reports cannot be edited as article drafts", 409);
     if (job.status !== "SUCCEEDED") throw new ContentError("Only completed drafts can be edited", 409);
     const updatedAt = new Date(Math.max(now.getTime(), job.updatedAt.getTime() + 1));
     const changed = await tx.aiWorkbenchJob.updateMany({ where: { id: job.id, siteId, status: "SUCCEEDED", updatedAt: new Date(action.expectedUpdatedAt) }, data: { draftText: action.draftText, updatedAt } });

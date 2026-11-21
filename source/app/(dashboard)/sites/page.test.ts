@@ -13,7 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 // behind "Waiting for first GSC sync…" — even though the Page model (the
 // source for those metrics, see lib/seo-metrics.ts) already has data.
 
-const counts = vi.hoisted(() => ({ keywords: 0, pages: 0, crawls: 0 }));
+const counts = vi.hoisted(() => ({ keywords: 0, pages: 0, crawls: 0, days: 0 }));
 const coverage = vi.hoisted((): { gscProperty: string }[] => []);
 const siteRows = vi.hoisted(() => ({ empty: false }));
 
@@ -30,11 +30,13 @@ vi.mock("@/lib/db", () => ({
                 domain: "a.example",
                 gscProperty: "https://a.example/",
                 createdAt: new Date("2026-03-01T00:00:00Z"),
-                _count: counts,
+                _count: { gscSyncCoverage: counts.days, crawls: counts.crawls },
                 gscSyncCoverage: coverage,
               },
             ],
     },
+    keyword: { findFirst: async () => counts.keywords ? { id: "keyword" } : null },
+    page: { findFirst: async () => counts.pages ? { id: "page" } : null },
   },
 }));
 vi.mock("@/lib/seo-metrics", async (importOriginal) => {
@@ -66,7 +68,7 @@ vi.mock("@/components/sites/sync-button", () => ({
 
 import AllSitesPage from "./page";
 
-async function render(next: typeof counts, empty = false): Promise<string> {
+async function render(next: Partial<typeof counts>, empty = false): Promise<string> {
   Object.assign(counts, next);
   siteRows.empty = empty;
   const tree = await AllSitesPage();
@@ -75,11 +77,11 @@ async function render(next: typeof counts, empty = false): Promise<string> {
 
 describe("All sites home", () => {
   it("lists each site with its numbers, a link into it and the add-site action", async () => {
-    const html = await render({ keywords: 1200, pages: 27, crawls: 3 });
+    const html = await render({ keywords: 1200, pages: 27, crawls: 3, days: 480 });
     expect(html).toContain(">All sites<");
     expect(html).toContain('href="/sites/site-a"');
     expect(html).toContain("a.example");
-    expect(html).toContain("1.2K keyword rows");
+    expect(html).toContain("480 days synced");
     expect(html).toContain("3 crawls");
     expect(html).toContain("[add-site:Add site]");
     // ADD SITE is the only primary button: Sync GSC on a card is small and outlined.

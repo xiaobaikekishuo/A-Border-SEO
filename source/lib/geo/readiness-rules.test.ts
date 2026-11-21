@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evaluateGeoPage, factCount, isArticleLike, isQuestionHeading, summarizeGeoPages, type GeoPageEvidence } from "./readiness-rules";
+import { evaluateGeoPage, evaluateSiteEntity, factCount, isArticleLike, isFresh, isQuestionHeading, summarizeGeoPages, type GeoPageEvidence } from "./readiness-rules";
 
 const article: GeoPageEvidence = {
   url: "https://shop.example/blogs/news/mug-care", title: "Mug care", description: "How to care for mugs", h1Count: 1, wordCount: 900, internalLinks: 12,
@@ -28,7 +28,8 @@ describe("GEO readiness signals", () => {
 
 describe("page evaluation", () => {
   it("passes a well-prepared article", () => {
-    expect(evaluateGeoPage(article)).toEqual({ SNIPPET: true, HEADING: true, TEXT: true, SECTIONS: true, QUESTIONS: true, FACTS: true, SCHEMA: true, AUTHORSHIP: true, LINKS: true });
+    // Without the GEO evidence of newer crawls, freshness, sources and rendering are not judged.
+    expect(evaluateGeoPage(article)).toEqual({ SNIPPET: true, HEADING: true, TEXT: true, SECTIONS: true, QUESTIONS: true, FACTS: true, SCHEMA: true, AUTHORSHIP: true, FRESHNESS: null, SOURCES: null, LINKS: true, RENDERING: null });
   });
   it("does not apply article checks to product pages and fails broken markup", () => {
     const product = evaluateGeoPage({ ...article, url: "https://shop.example/products/mug", articleHeadings: ["Mug"], schemaReport: { version: 2, parsedBlocks: 1, findings: [{ severity: "ERROR" }], entities: [{ types: ["Product"] }], signals: {} } });
@@ -36,8 +37,36 @@ describe("page evaluation", () => {
   });
   it("leaves checks an older crawl cannot judge out of the score", () => {
     const legacy = evaluateGeoPage({ ...article, articleText: null, articleHeadings: null, schemaReport: { version: 1, parsedBlocks: 1, findings: [], entities: [{ types: ["Article"] }] } });
-    expect(legacy).toEqual({ SNIPPET: true, HEADING: true, TEXT: true, SECTIONS: null, QUESTIONS: null, FACTS: null, SCHEMA: true, AUTHORSHIP: null, LINKS: true });
+    expect(legacy).toEqual({ SNIPPET: true, HEADING: true, TEXT: true, SECTIONS: null, QUESTIONS: null, FACTS: null, SCHEMA: true, AUTHORSHIP: null, FRESHNESS: null, SOURCES: null, LINKS: true, RENDERING: null });
     expect(evaluateGeoPage({ ...article, schemaReport: null }).SCHEMA).toBeNull();
+  });
+  it("judges freshness, cited sources and rendering from the crawl's GEO evidence", () => {
+    const asOf = new Date("2026-11-10T00:00:00Z");
+    const signals = { version: 1, sourceLinks: 2, sourceHosts: ["who.int"], jsShell: false, jsReason: null, textUnits: 900, published: "2025-01-05", modified: "2026-08-01" };
+    expect(evaluateGeoPage({ ...article, geoSignals: signals }, asOf)).toMatchObject({ FRESHNESS: true, SOURCES: true, RENDERING: true });
+    const stale = evaluateGeoPage({ ...article, geoSignals: { ...signals, sourceLinks: 0, modified: null, published: "2024-03-01" } }, asOf);
+    expect(stale).toMatchObject({ FRESHNESS: false, SOURCES: false });
+    // A page without dates is not fresh; a product page is not judged on either.
+    expect(evaluateGeoPage({ ...article, geoSignals: { ...signals, published: null, modified: null } }, asOf).FRESHNESS).toBe(false);
+    expect(evaluateGeoPage({ ...article, url: "https://shop.example/products/mug", schemaReport: null, geoSignals: signals }, asOf)).toMatchObject({ FRESHNESS: null, SOURCES: null, RENDERING: true });
+    expect(evaluateGeoPage({ ...article, geoSignals: { ...signals, jsShell: true, jsReason: "empty_mount" } }, asOf).RENDERING).toBe(false);
+    // Evidence in an unknown shape is treated as absent.
+    expect(evaluateGeoPage({ ...article, geoSignals: { sourceLinks: "2" } }, asOf).RENDERING).toBeNull();
+    expect(isFresh(["2025-11-10"], asOf)).toBe(true);
+    expect(isFresh(["2025-11-09"], asOf)).toBe(false);
+  });
+  it("judges the site entity once from business markup", () => {
+    const report = (signals: Record<string, unknown>) => ({ version: 2, parsedBlocks: 1, findings: [], entities: [{ types: ["Organization"] }], signals });
+    const pages = [
+      { url: "https://shop.example/about", schemaReport: report({ organization: true, organizationLogo: true }) },
+      { url: "https://shop.example/", schemaReport: report({ organization: true, organizationLogo: true, organizationSameAs: 3, organizationContact: true }) },
+      { url: "https://shop.example/blog/a", schemaReport: report({ organization: false }) },
+    ];
+    expect(evaluateSiteEntity(pages, true)).toEqual({ status: true, organization: true, logo: true, sameAs: 3, contact: true, url: "https://shop.example/" });
+    expect(evaluateSiteEntity(pages.slice(0, 1), true)).toMatchObject({ status: false, logo: true, sameAs: 0, contact: false });
+    expect(evaluateSiteEntity([], true)).toMatchObject({ status: false, organization: false, url: null });
+    // An older crawl did not record the details.
+    expect(evaluateSiteEntity(pages, false).status).toBeNull();
   });
   it("counts Chinese text by character", () => {
     expect(evaluateGeoPage({ ...article, articleText: "我们专注于手工陶瓷。".repeat(30) }).TEXT).toBe(true);

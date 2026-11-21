@@ -8,18 +8,23 @@ import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { positionBand, formatPosition, formatCtr } from "@/lib/seo-metrics";
 
+/** A position with a dot for its band: green top 3, amber top 10, grey beyond. */
 export function PositionBadge({ position }: { position: number }) {
   const band = positionBand(position);
   return (
     <span
       className={cn(
-        "inline-flex min-w-12 items-center justify-center rounded-md px-2 py-0.5 font-data text-[12px]",
-        band === "top3" && "rank-top3",
-        band === "top10" && "rank-top10",
-        band === "top20" && "rank-top20",
-        band === "deep" && "rank-deep"
+        "inline-flex min-w-12 items-center justify-end gap-1.5 font-data text-[12.5px]",
+        band === "deep" ? "text-muted-foreground" : "text-text-strong"
       )}
     >
+      <span
+        aria-hidden
+        className={cn(
+          "size-1.5 shrink-0 rounded-full",
+          band === "top3" ? "bg-success" : band === "top10" ? "bg-warning" : "bg-line-strong"
+        )}
+      />
       {formatPosition(position)}
     </span>
   );
@@ -92,7 +97,7 @@ export function MetricTable({
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px] text-[13px]">
           <thead>
-            <tr className="border-b border-border bg-bg-soft">
+            <tr className="border-b border-border">
               {headers.map((h) => {
                 const sortable = h.sortKey != null && onSort != null;
                 const active = sortable && sort?.key === h.sortKey;

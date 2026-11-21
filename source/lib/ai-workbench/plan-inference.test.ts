@@ -79,7 +79,9 @@ describe("pinned ChatGPT app workbench inference", () => {
     expect(job.result).toEqual(result);
   });
   it("keeps consumed usage even when the completed draft fails validation", async () => {
-    fetchMock.mockResolvedValue(completeResponse({ input_tokens: 20, output_tokens: 10, total_tokens: 30 }, { ...result, contentMarkdown: "[invented](https://unknown.example.test/)" }));
+    // A paragraph edit quoting text that is not in the source fails validation (outside links no longer do).
+    const invalid = { ...result, paragraphEdits: [{ id: "p1", sourceText: "A passage that is not in the source.", replacementText: "Revised.", reason: "Clarity", evidence: ["Source"], verification: ["Review"] }] };
+    fetchMock.mockResolvedValue(completeResponse({ input_tokens: 20, output_tokens: 10, total_tokens: 30 }, invalid));
     expect(await runPlanInference(input, new AbortController().signal)).toEqual({ ok: false });
     expect(await db.aiWorkbenchJob.findUniqueOrThrow({ where: { id: input.jobId } })).toMatchObject({ status: "FAILED", result: null, usage: { totalTokens: 30 } });
   });

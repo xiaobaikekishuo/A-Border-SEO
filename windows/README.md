@@ -54,7 +54,8 @@
 | `ABORDER_DB_VOLUME` | 使用指定名称的数据库卷（默认 `aborder-seo-local_pgdata`） |
 | `GOOGLE_HTTP_PROXY` | 访问 Google 需要代理时填写，例如 `http://host.docker.internal:7890` |
 | `CRAWL_MAX_PAGES`、`CRAWL_MAX_MINUTES` | 单次抓取的页数和时间上限 |
-| `SCHEDULER_ENABLED` | 设为 `true` 开启每日同步、每周抓取等定时任务 |
+| `SCHEDULER_ENABLED` | 设为 `true` 开启每日同步、每周抓取等定时任务；提示词跟踪和排名追踪设置的定期运行、每周 AI 行动清单也需要它。手动发起的排名检查不受影响，结果由后台任务自动收取 |
+| `ABORDER_SLOW_QUERY_MS` | 页面打开慢时排查用：设为毫秒数（如 `200`），耗时达到它的数据库查询会写进应用日志，排查完删掉 |
 
 只对脚本生效的 Windows 环境变量（在系统环境变量中设置）：
 

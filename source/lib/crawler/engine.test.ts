@@ -409,3 +409,34 @@ describe("parseHtml attribute lookup edge cases", () => {
     expect(page.imagesMissingAlt).toBe(1);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/*  Chinese, Japanese and Korean text                                   */
+/* ------------------------------------------------------------------ */
+
+describe("parseHtml with CJK text", () => {
+  const chinese = (title: string, body: string) => parseHtml(
+    "https://example.com/blog/cups",
+    `<html><head><title>${title}</title><meta name="description" content="景德镇匠人手工制作的陶瓷杯，从选泥、拉坯到施釉和烧制全程手工，适合日常饮茶与咖啡，也适合作为礼物。"></head>` +
+      `<body><h1>${title}</h1><p>${body}</p></body></html>`,
+    200, 100, 1000, null, "https://example.com/"
+  );
+
+  it("counts each Chinese character instead of a whole paragraph as one word", () => {
+    const page = chinese("手工陶瓷杯推荐", "我们专注于手工陶瓷杯的设计与制作。".repeat(20));
+    // 320 characters of body text plus the title twice: well past 300.
+    expect(page.wordCount).toBeGreaterThan(300);
+  });
+
+  it("scores a Chinese title by its width, not by its character count", () => {
+    const fits = chinese("手工陶瓷杯推荐：景德镇匠人出品", "正文。".repeat(200));
+    // 40 characters is within 15 to 65 characters, but as wide as 80 Latin letters.
+    const tooWide = chinese("手工陶瓷杯".repeat(8), "正文。".repeat(200));
+    expect(fits.contentScore - tooWide.contentScore).toBe(10);
+  });
+
+  it("saves the GEO evidence of the page", () => {
+    const page = chinese("手工陶瓷杯推荐", "参见<a href=\"https://www.who.int/x\">世界卫生组织</a>的报告。");
+    expect(page.geoSignals).toMatchObject({ version: 1, sourceLinks: 1, sourceHosts: ["who.int"], jsShell: false });
+  });
+});

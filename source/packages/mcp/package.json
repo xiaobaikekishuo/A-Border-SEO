@@ -1,6 +1,6 @@
 {
   "name": "@a-border/seo-mcp",
-  "version": "1.5.6",
+  "version": "1.9.2",
   "description": "Read-only MCP server for A-Border SEO: your Search Console data, crawl issues, Core Web Vitals and SEO opportunities for AI agents, through your own instance's API.",
   "keywords": [
     "mcp",

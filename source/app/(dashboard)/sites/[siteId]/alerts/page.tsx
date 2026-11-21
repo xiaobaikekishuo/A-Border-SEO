@@ -7,6 +7,7 @@ import { ensureDefaultAlerts } from "@/lib/alerts/evaluate";
 import { PageHeader } from "@/components/ui/page-header";
 import { ReportAnalysisLink } from "@/components/ai-workbench/report-analysis-link";
 import { EvaluateAlertsButton } from "@/components/sites/evaluate-alerts-button";
+import { WeeklyReportToggle } from "@/components/ai-workbench/weekly-report-toggle";
 import { formatDay } from "@/lib/format";
 
 /** Names for types whose enum name does not read well. */
@@ -25,6 +26,7 @@ export default async function AlertsPage({ params }: Props) {
     NEW_404: t("new 404", "新增 404 页面"),
     CRAWL_ISSUES: t("crawl issues", "抓取问题"),
     VITALS_DEGRADED: t("vitals degraded", "核心网页指标退化"),
+    RANK_DROP: t("tracked keyword dropped", "追踪关键词排名下滑"),
   };
   const session = await auth();
   const { siteId } = await params;
@@ -48,7 +50,7 @@ export default async function AlertsPage({ params }: Props) {
         title={t("Alerts", "告警")}
         description={
           <>
-            {t("Rules for traffic drops, position changes, crawl health, sites that are mostly noindex and vitals. They are checked after each GSC or Bing sync, after each crawl and when you click Evaluate now. Fired alerts show here and go to your", "监测流量下降、排名变化、抓取健康分、大范围 noindex 及核心指标。每次 GSC 或 Bing 同步、抓取结束及点击立即评估后检查规则。触发的告警显示在这里，并发送到已配置的")}{" "}
+            {t("Rules for traffic drops, position changes, tracked keywords that drop in a rank check, crawl health, sites that are mostly noindex and vitals. They are checked after each GSC or Bing sync, after each crawl and rank check, and when you click Evaluate now. Fired alerts show here and go to your", "监测流量下降、排名变化、排名检查中下滑的追踪关键词、抓取健康分、大范围 noindex 及核心指标。每次 GSC 或 Bing 同步、抓取和排名检查结束及点击立即评估后检查规则。触发的告警显示在这里，并发送到已配置的")}{" "}
             <Link href="/settings#webhook" className="text-link">
               {t("alert webhook", "告警 Webhook")}</Link>{" "}
             {t("and", "和")}{" "}
@@ -62,6 +64,8 @@ export default async function AlertsPage({ params }: Props) {
           <ReportAnalysisLink siteId={siteId} scope="alerts" t={t} />
         </>}
       />
+
+      <div className="mb-5"><WeeklyReportToggle key={siteId} siteId={siteId} /></div>
 
       <div className="panel divide-y divide-border-soft">
         {alerts.map((a) => (

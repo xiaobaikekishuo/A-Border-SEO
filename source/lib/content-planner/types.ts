@@ -1,6 +1,7 @@
 import type { UpdateOutcome } from "@/lib/content-planner/update-outcome";
 import type { OptimizationEvidence } from "@/lib/content-planner/optimization-evidence";
 import type { ArticleReview } from "./article-review-schema";
+import type { ReviewSignals } from "./review-quality";
 import type { FunnelCounts } from "./funnel";
 import type { z } from "zod";
 import type { actionSchema, briefSchema, planSchema, workerActionSchema } from "./schema";
@@ -35,7 +36,7 @@ export type ContentPillar = {
 export type ContentPlanJob = {
   keywordSelection?: import("./keyword-selection").KeywordSelection;
   topicCount?: number; funnelCounts?: FunnelCounts;
-  kind?: string; reviewResult?: ArticleReview | null; reviewPages?: { pageId: string; title: string; url: string; source: string }[];
+  kind?: string; reviewResult?: ArticleReview | null; reviewPages?: { pageId: string; title: string; url: string; source: string; signals?: ReviewSignals | null; excerptShortened?: boolean }[];
   id: string; pillarId: string; status: "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED";
   result: ContentPlan | null; error: string | null; appliedAt: string | null;
   createdAt: string; startedAt: string | null; finishedAt: string | null;

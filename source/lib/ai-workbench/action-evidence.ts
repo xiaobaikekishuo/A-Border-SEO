@@ -8,6 +8,9 @@ import { reportTotal, reportUrl, type AiReport } from "@/lib/geo/reports";
 import type { ProbeReport } from "@/lib/geo/probe";
 import type { GeoSnapshot } from "@/lib/geo/types";
 import type { ActionScope, ReportEvidence } from "./action-scope";
+import { topOf } from "@/lib/rank-tracking/rules";
+import { RESEARCH_LOCATIONS } from "@/lib/dataforseo/market";
+import { normalizeSourceUrl, sourceKey } from "./source-url";
 
 type Db = Prisma.TransactionClient;
 type Site = ReportEvidence["site"];
@@ -118,12 +121,15 @@ async function auditEvidence(db: Db, site: Site, since: Date | undefined): Promi
 async function performanceEvidence(db: Db, site: Site, since: Date | undefined): Promise<Section> {
   const reports = await db.vitalsReport.findMany({ where: { siteId: site.id, date: { gte: since } },
     orderBy: [{ date: "desc" }, { id: "asc" }], take: 10,
-    select: { date: true, url: true, device: true, perfScore: true, lcp: true, cls: true, inp: true, ttfb: true, speedIndex: true } });
+    select: { date: true, url: true, device: true, perfScore: true, lcp: true, cls: true, inp: true, ttfb: true, speedIndex: true,
+      tbt: true, fieldSource: true, fieldLcp: true, fieldInp: true, fieldCls: true } });
   const rows: Row[] = [];
   for (const r of reports) {
     const url = publicPage(r.url, site);
     if (url) rows.push({ kind: "performanceSample", date: r.date.toISOString(), url, device: r.device, perfScore: r.perfScore,
-      lcpSeconds: r.lcp, cls: r.cls, inpMs: r.inp, ttfbSeconds: r.ttfb, speedIndexSeconds: r.speedIndex });
+      lcpSeconds: r.lcp, cls: r.cls, inpMs: r.inp, ttfbSeconds: r.ttfb, speedIndexSeconds: r.speedIndex,
+      // Lab TBT, and the real-user p75 (Chrome UX Report) for this URL or the whole origin.
+      tbtMs: r.tbt, fieldSource: r.fieldSource, fieldLcpSeconds: r.fieldLcp, fieldInpMs: r.fieldInp, fieldCls: r.fieldCls });
   }
   return { source: "performance", rows };
 }
@@ -181,6 +187,74 @@ async function geoEvidence(db: Db, site: Site): Promise<Section> {
   return { source: "geo", rows };
 }
 
+type RankRunFacts = { finishedAt: Date; device: string; depth: number; language: string; location: number; failed: number };
+export type RankCheckFacts = {
+  keyword: string; position: number | null; url: string | null; aiOverview: boolean | null; aiCited: boolean | null; checkedAt: Date | null;
+  top: unknown; previous: number | null; previousUrl: string | null; previousTop: unknown; hadPrevious: boolean;
+};
+const samePage = (a: string, b: string) => {
+  const x = normalizeSourceUrl(a), y = normalizeSourceUrl(b);
+  return x && y ? sourceKey(x) === sourceKey(y) : a === b;
+};
+
+/**
+ * The latest finished rank check against each keyword's previous one: the
+ * biggest moves first (fell out, fell, ranking page changed, entered, rose),
+ * then unchanged keywords, and for the five worst drops the sites that moved
+ * above us in the top 10. Competitors are named by domain, never as a URL.
+ */
+export function rankingRows(run: RankRunFacts, checks: RankCheckFacts[], site: Site): Row[] {
+  const rows: Row[] = [{ kind: "rankRun", date: run.finishedAt.toISOString(), device: run.device, depth: run.depth, language: run.language,
+    location: RESEARCH_LOCATIONS.find(item => item.value === run.location)?.en ?? String(run.location), checked: checks.length, failed: run.failed }];
+  const scored = checks.map(check => {
+    const change = check.previous !== null && check.position !== null ? check.previous - check.position : null;
+    const urlChanged = !!check.url && !!check.previousUrl && !samePage(check.url, check.previousUrl);
+    const left = check.previous !== null && check.position === null;
+    const entered = check.hadPrevious && check.previous === null && check.position !== null;
+    const score = left ? 2000 + (check.previous ?? 0) : change !== null && change < 0 ? 1000 - change : urlChanged ? 500
+      : entered ? 300 : change !== null && change > 0 ? 100 + change : 0;
+    return { check, change, score };
+  }).sort((a, b) => b.score - a.score || (a.check.position ?? 999) - (b.check.position ?? 999) || (a.check.keyword < b.check.keyword ? -1 : 1));
+  for (const { check, change } of scored.slice(0, 25)) {
+    rows.push({ kind: "rankChange", query: check.keyword.slice(0, 160), position: check.position, previousPosition: check.previous, change,
+      url: check.url ? publicPage(check.url, site) : null, previousUrl: check.previousUrl ? publicPage(check.previousUrl, site) : null,
+      aiOverview: check.aiOverview, aiCited: check.aiCited, date: check.checkedAt?.toISOString() ?? null });
+  }
+  const own = site.domain.replace(/^www\./, "").toLowerCase();
+  for (const { check, change } of scored.filter(item => item.score >= 1000).slice(0, 5)) {
+    const before = new Map(topOf(check.previousTop).map(item => [item.domain.replace(/^www\./, "").toLowerCase(), item.rank]));
+    const limit = check.position ?? run.depth + 1;
+    let added = 0;
+    for (const item of topOf(check.top)) {
+      const domain = item.domain.replace(/^www\./, "").toLowerCase();
+      if (added >= 3 || item.rank >= limit || !domain || domain === own || domain.endsWith(`.${own}`)) continue;
+      const previous = before.get(domain) ?? null;
+      if (previous !== null && previous <= item.rank) continue;
+      rows.push({ kind: "serpEntrant", query: check.keyword.slice(0, 160), competitor: domain.slice(0, 120), position: item.rank, previousPosition: previous, change });
+      added++;
+    }
+  }
+  return rows;
+}
+
+async function rankingsEvidence(db: Db, site: Site): Promise<Section> {
+  const run = await db.rankRun.findFirst({ where: { siteId: site.id, status: { in: ["SUCCEEDED", "PARTIAL"] }, finishedAt: { not: null } },
+    orderBy: { finishedAt: "desc" }, select: { id: true, finishedAt: true, device: true, depth: true, language: true, location: true, failed: true } });
+  if (!run?.finishedAt) return { source: "rankings", rows: [] };
+  const checks = await db.$queryRaw<RankCheckFacts[]>`
+    SELECT c.keyword, c.position, c.url, c."aiOverview", c."aiCited", c."checkedAt", c.top,
+      p.position AS "previous", p.url AS "previousUrl", p.top AS "previousTop", (p.id IS NOT NULL) AS "hadPrevious"
+    FROM "RankCheck" c
+    LEFT JOIN LATERAL (
+      SELECT q.id, q.position, q.url, q.top FROM "RankCheck" q
+      WHERE q."siteId" = c."siteId" AND q.keyword = c.keyword AND q.status = 'OK' AND q."runId" <> c."runId" AND q."createdAt" < c."createdAt"
+      ORDER BY q."createdAt" DESC, q.id DESC
+      LIMIT 1
+    ) p ON true
+    WHERE c."runId" = ${run.id} AND c.status = 'OK'`;
+  return { source: "rankings", rows: rankingRows({ ...run, finishedAt: run.finishedAt }, checks, site) };
+}
+
 /** The caller must already have verified ownership of site in the same transaction. */
 export async function collectActionEvidence(db: Db, site: Site, scope: ActionScope, now = new Date()): Promise<ReportEvidence> {
   const current = getGscDateRange(7, now);
@@ -197,6 +271,7 @@ export async function collectActionEvidence(db: Db, site: Site, scope: ActionSco
   if (scope === "weekly" || scope === "performance") sections.push(await performanceEvidence(db, site, since));
   if (scope === "weekly" || scope === "alerts") sections.push(await alertsEvidence(db, site, since));
   if (scope === "geo") sections.push(await geoEvidence(db, site));
+  if (scope === "rankings") sections.push(await rankingsEvidence(db, site));
   return limitActionEvidence({ scope, site: { id: site.id, domain: site.domain }, period, sections, hasData: sections.some(s => s.rows.length > 0) });
 }
 

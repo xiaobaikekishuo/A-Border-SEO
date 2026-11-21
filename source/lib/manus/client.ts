@@ -3,6 +3,7 @@ import { createLocalProxy } from "@/lib/http/local-proxy";
 import { MAX_WORKBOOK_BYTES } from "./workbook-limits";
 import { normalizeResearchInput, researchPrompt } from "./prompt";
 import { ManusError, type ManusErrorCode, type ManusResearchInput, type ManusResearchResult } from "./types";
+import { templatePrompt, templateSchema, templateTitle, type ManusProfile, type ManusTemplate, type TemplateInput } from "./templates";
 
 export { normalizeResearchInput, ManusError };
 export type { ManusErrorCode, ManusResearchInput, ManusResearchResult };
@@ -198,6 +199,67 @@ async function researchMessages(secret: string, remoteId: string, kind: OutputKi
     if (result.files.length && (!includeSummary || result.summary)) break;
   }
   return result;
+}
+
+/**
+ * One private task of a research template (lib/manus/templates.ts), with the
+ * JSON Schema its result must follow. Like keyword research: no account
+ * connectors, no follow-up questions, never shared.
+ */
+export async function createTemplateTask(key: string, kind: ManusTemplate, input: TemplateInput, profile: ManusProfile) {
+  const secret = credentials(key);
+  const prompt = templatePrompt(kind, input);
+  if (containsKey(prompt, secret)) throw new ManusError("invalid_input");
+  const data = await request(secret, "task.create", undefined, {
+    agent_profile: profile,
+    share_visibility: "private",
+    interactive_mode: false,
+    clear_connectors: true,
+    title: templateTitle(kind, input),
+    structured_output_schema: templateSchema(kind),
+    message: { content: [{ type: "text", text: prompt }] },
+  });
+  const id = data.task_id;
+  if (typeof id !== "string" || !validId.test(id) || containsKey(id, secret)) {
+    throw new ManusError("invalid_response", true);
+  }
+  return { remoteId: id, taskUrl: taskPage(id) };
+}
+
+export type TemplateTaskState = {
+  status: ManusResearchResult["status"];
+  taskUrl: string;
+  summary: string;
+  /** Manus's structured result, once the task finished: whether extraction worked, and the value. */
+  structured: { success: boolean; value: unknown } | null;
+};
+
+/** A template task's status, its latest summary text and, once it finished, its structured result. */
+export async function readTemplateTask(key: string, remoteId: string): Promise<TemplateTaskState> {
+  const secret = taskCredentials(key, remoteId);
+  const detail = await request(secret, "task.detail", new URLSearchParams({ task_id: remoteId }));
+  const task = record(detail.task);
+  if (task.id !== remoteId) throw new ManusError("invalid_response");
+  const status = taskStatus(task);
+  const state: TemplateTaskState = { status, taskUrl: taskPage(remoteId), summary: "", structured: null };
+  if (status === "running" || status === "failed") return state;
+  for await (const data of outputPages(secret, remoteId, "task.listMessages")) {
+    if (data.task_id !== remoteId || !Array.isArray(data.messages)) throw new ManusError("invalid_response");
+    for (const event of data.messages) {
+      const message = record(event);
+      if (message.type === "structured_output_result" && !state.structured) {
+        const result = record(message.structured_output_result);
+        if (typeof result.success === "boolean") state.structured = { success: result.success, value: result.value ?? null };
+      }
+      if (message.type === "assistant_message" && !state.summary) {
+        const { content } = record(message.assistant_message);
+        if (typeof content === "string" && !containsKey(content, secret)) state.summary = content.trim().slice(0, 24_000);
+      }
+    }
+    if (state.summary && (state.structured || status !== "completed")) break;
+  }
+  if (state.structured && containsKey(JSON.stringify(state.structured.value), secret)) throw new ManusError("invalid_response");
+  return state;
 }
 
 export async function readResearch(key: string, remoteId: string): Promise<ManusResearchResult> {

@@ -40,7 +40,7 @@ module.exports = {
     ...(existsSync(management) ? [{ from: management, to: "management-config.json" }] : []),
     ...(isHosted ? [
       { from: hosted, to: "hosted-workspace.json" },
-      { from: "../source/local-worker", to: "local-worker", filter: ["index.mjs", "lib.mjs"] },
+      { from: "../source/local-worker", to: "local-worker", filter: ["index.mjs", "lib.mjs", "app-server.mjs"] },
     ] : [{
       from: "../windows",
       to: "windows",

@@ -14,11 +14,13 @@ import {
   formatBingKeywords,
   formatBingPages,
   formatBingTraffic,
+  formatCitationGaps,
   formatCrawlIssues,
   formatCrawls,
   formatKeywords,
   formatOpportunities,
   formatPages,
+  formatRankings,
   formatSavedKeywords,
   formatSiteOverview,
   formatTraffic,
@@ -74,7 +76,9 @@ export const TOOL_NAMES = [
   "get_bing_keywords",
   "get_bing_pages",
   "get_saved_keywords",
+  "get_rankings",
   "get_ai_visibility",
+  "get_citation_gaps",
 ] as const;
 
 export function registerTools(server: McpServer, api: ApiClient): void {
@@ -243,7 +247,7 @@ export function registerTools(server: McpServer, api: ApiClient): void {
     "get_vitals",
     {
       title: "Core Web Vitals",
-      description: "Core Web Vitals reports for a site, newest first: performance score, LCP, CLS, INP and TTFB.",
+      description: "Core Web Vitals reports for a site, newest first: performance score, lab LCP, CLS, TBT and TTFB, and the Chrome UX Report p75 of real visits (LCP, INP, CLS) when Chrome has enough data.",
       inputSchema: {
         siteId,
         device: z.enum(["MOBILE", "DESKTOP"]).optional().describe("Only this device"),
@@ -362,6 +366,22 @@ export function registerTools(server: McpServer, api: ApiClient): void {
   );
 
   server.registerTool(
+    "get_rankings",
+    {
+      title: "Rank tracking (measured Google positions)",
+      description:
+        "The keywords tracked in A-Border SEO's rank tracking for a site, each with its measured Google organic position in the site's research market from the latest check, the change since the check before, the ranking page (and whether it changed), whether Google showed an AI Overview and cited the site, and Search Console's average position over the last 28 days for comparison; plus the latest run. Reads stored checks only: it runs no check and costs nothing.",
+      inputSchema: { siteId },
+      annotations: READ_ONLY,
+    },
+    ({ siteId }) =>
+      run(async () => {
+        const r = await api.get<Parameters<typeof formatRankings>[0]>(`/sites/${encodeURIComponent(siteId)}/rankings`);
+        return formatRankings(r);
+      })
+  );
+
+  server.registerTool(
     "get_ai_visibility",
     {
       title: "AI platform visibility (GEO)",
@@ -374,6 +394,22 @@ export function registerTools(server: McpServer, api: ApiClient): void {
       run(async () => {
         const r = await api.get<Parameters<typeof formatAiVisibility>[0]>(`/sites/${encodeURIComponent(siteId)}/ai-visibility`);
         return formatAiVisibility(r);
+      })
+  );
+
+  server.registerTool(
+    "get_citation_gaps",
+    {
+      title: "AI citation gaps (GEO)",
+      description:
+        "Third-party sites that AI answers from A-Border SEO's prompt tracking cite while naming a competitor and leaving the brand out: how often, which competitors and platforms, the prompts asked and the pages cited. These are the places where the brand could earn a mention. From the latest answer per prompt and platform; asks no platform.",
+      inputSchema: { siteId },
+      annotations: READ_ONLY,
+    },
+    ({ siteId }) =>
+      run(async () => {
+        const r = await api.get<Parameters<typeof formatCitationGaps>[0]>(`/sites/${encodeURIComponent(siteId)}/citation-gaps`);
+        return formatCitationGaps(r);
       })
   );
 }

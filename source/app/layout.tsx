@@ -24,7 +24,7 @@ export async function generateMetadata(): Promise<Metadata> {
 // Match the navy workspace, including browser chrome and native form controls.
 export const viewport: Viewport = {
   colorScheme: "dark",
-  themeColor: "#080e1c",
+  themeColor: "#0b0d11",
 };
 
 export default async function RootLayout({

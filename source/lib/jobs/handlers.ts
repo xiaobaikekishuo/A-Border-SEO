@@ -14,6 +14,8 @@ import { getAlertEmail, getWebhook } from "@/lib/user-settings";
 import { webhooksEnabled } from "@/lib/webhooks/config";
 import { alertPayload, firesToDeliver, sendWebhook, type AlertDelivery } from "@/lib/webhooks/deliver";
 import { GEO_TRIAL_JOB, GEO_VISIBILITY_JOB, geoTrialHandler, geoVisibilityHandler } from "@/lib/geo/visibility-job";
+import { RANK_CHECK_JOB, RANK_COLLECT_JOB, rankCheckHandler, rankCollectHandler } from "@/lib/rank-tracking/job";
+import { WEEKLY_REPORT_EMAIL_JOB, WEEKLY_REPORT_WEBHOOK_JOB, weeklyReportEmailHandler, weeklyReportWebhookHandler } from "@/lib/ai-workbench/weekly-delivery";
 import { clampMaxPages } from "./policy";
 import { isPermanentJobError, JobError, JobLostError, type JobClass, type JobHandler } from "./types";
 
@@ -60,6 +62,10 @@ export const ALERT_WEBHOOK_JOB = "alert-webhook";
 export const ALERT_EMAIL_JOB = "alert-email";
 /** A prompt tracking run, and its trial with one prompt per platform (lib/geo/visibility-job.ts). */
 export { GEO_TRIAL_JOB, GEO_VISIBILITY_JOB };
+/** A rank check run posted to DataForSEO, and the job that collects its results (lib/rank-tracking/job.ts). */
+export { RANK_CHECK_JOB, RANK_COLLECT_JOB };
+/** The email and webhook delivery of a weekly AI action list (lib/ai-workbench/weekly-delivery.ts). */
+export { WEEKLY_REPORT_EMAIL_JOB, WEEKLY_REPORT_WEBHOOK_JOB };
 
 /** The job's site, or a permanent failure when it is gone. */
 async function siteOf(db: PrismaClient, job: Job) {
@@ -336,6 +342,10 @@ export const BUILT_IN_JOB_HANDLERS: readonly JobHandler[] = [
   alertEmailHandler,
   geoVisibilityHandler,
   geoTrialHandler,
+  rankCheckHandler,
+  rankCollectHandler,
+  weeklyReportEmailHandler,
+  weeklyReportWebhookHandler,
 ];
 
 for (const handler of BUILT_IN_JOB_HANDLERS) {

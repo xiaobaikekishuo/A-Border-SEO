@@ -11,13 +11,17 @@ import {
   GEO_VISIBILITY_JOB,
   GSC_SYNC_JOB,
   jobTypes,
+  RANK_CHECK_JOB,
+  RANK_COLLECT_JOB,
   registerJobHandler,
   VITALS_JOB,
+  WEEKLY_REPORT_EMAIL_JOB,
+  WEEKLY_REPORT_WEBHOOK_JOB,
 } from "./handlers";
 import { isPermanentJobError, JobError } from "./types";
 
 describe("job handler registry", () => {
-  it("registers the nine built-in types with their class and attempts", () => {
+  it("registers the thirteen built-in types with their class and attempts", () => {
     expect(BUILT_IN_JOB_HANDLERS.map((h) => [h.type, h.class, h.maxAttempts])).toEqual([
       [CRAWL_JOB, "LONG", 2],
       [VITALS_JOB, "LONG", 2],
@@ -28,6 +32,10 @@ describe("job handler registry", () => {
       [ALERT_EMAIL_JOB, "SHORT", 3],
       [GEO_VISIBILITY_JOB, "LONG", 3],
       [GEO_TRIAL_JOB, "LONG", 3],
+      [RANK_CHECK_JOB, "SHORT", 3],
+      [RANK_COLLECT_JOB, "SHORT", 5],
+      [WEEKLY_REPORT_EMAIL_JOB, "SHORT", 3],
+      [WEEKLY_REPORT_WEBHOOK_JOB, "SHORT", 5],
     ]);
     for (const h of BUILT_IN_JOB_HANDLERS) expect(getJobHandler(h.type)).toBe(h);
   });

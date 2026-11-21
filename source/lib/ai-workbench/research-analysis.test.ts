@@ -72,8 +72,13 @@ describe("research request boundaries", () => {
     const id = await start("BACKLINK_ANALYSIS", { body: "https://reference.com/review\thttps://owned.com/unseen\tA claim" });
     const job = await db.aiWorkbenchJob.findUniqueOrThrow({ where: { id } });
     expect(job.context).toMatchObject({ allowedInternalLinks: ["https://owned.com/guide"], researchEvidence: { counters: { outgoingLinks: 1, sampledOutgoingLinks: 1, backlinkSample: 1, totalBacklinks: null }, sources: { gsc: null }, links: [expect.objectContaining({ id: "O1", direction: "OUTGOING", verified: true }), expect.objectContaining({ id: "B1", direction: "INCOMING_SAMPLE", verified: false, nofollow: null })] } });
-    expect(() => validateWorkbenchResult({ ...result, contentMarkdown: "https://owned.com/unseen" }, "owned.com", job.context)).toThrow("verified site URLs");
-    expect(() => validateWorkbenchResult({ ...result, contentMarkdown: "https://reference.com/review" }, "owned.com", job.context)).toThrow("verified site URLs");
+    // Neither an unseen own page nor a pasted backlink becomes a link of the report: both are marked and listed.
+    const unseen = validateWorkbenchResult({ ...result, contentMarkdown: "https://owned.com/unseen" }, "owned.com", job.context);
+    expect(unseen.contentMarkdown).not.toContain("owned.com/unseen");
+    expect(unseen.linkReview?.[0]).toMatchObject({ url: "https://owned.com/unseen", action: "REPLACED" });
+    const pasted = validateWorkbenchResult({ ...result, contentMarkdown: "https://reference.com/review" }, "owned.com", job.context);
+    expect(pasted.contentMarkdown).not.toContain("reference.com/review");
+    expect(pasted.linkReview?.[0]).toMatchObject({ url: "https://reference.com/review", action: "REPLACED" });
   });
   it("treats missing crawl and no backlink samples as unknown, not no backlinks", async () => {
     await db.crawl.deleteMany();

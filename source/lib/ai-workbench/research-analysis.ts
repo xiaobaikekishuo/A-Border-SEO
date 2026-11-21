@@ -8,6 +8,7 @@ import { auditIssueDisplayType } from "@/lib/crawler/audit-policy";
 import { dateWindow } from "@/lib/date-utils";
 import { assertResearchProvider, fitResearchContext, sampleResearchRows, sampleResearchSearch } from "./research-context";
 import type { WorkbenchRequest, WorkbenchResult } from "./schema";
+import { languageName } from "@/lib/dataforseo/market";
 
 export type ResearchKind = "DOMAIN_ANALYSIS" | "BACKLINK_ANALYSIS";
 export const isResearchAnalysis = (kind: string): kind is ResearchKind => kind === "DOMAIN_ANALYSIS" || kind === "BACKLINK_ANALYSIS";
@@ -143,7 +144,7 @@ export async function buildResearchContext(tx: Prisma.TransactionClient, site: {
 }
 
 export function researchAnalysisPrompt(input: WorkbenchRequest, context: unknown) {
-  return `You are this site's SEO research analyst. Task: ${input.kind}. Write ${input.language === "en" ? "English" : "Simplified Chinese"}.
+  return `You are this site's SEO research analyst. Task: ${input.kind}. Write ${languageName(input.language)}.
 Analyze only the supplied local evidence. DOMAIN_ANALYSIS: explain observed search performance and crawl observations, prioritize proposals with evidence IDs, and provide verification steps. BACKLINK_ANALYSIS: separately discuss O-numbered OUTGOING links observed in our crawl and B-numbered user-provided INCOMING_SAMPLE rows. The two directions must never be combined into a backlink total. B rows are unverified claims; they were not fetched. Do not claim their existence, quality, authority, spam status, follow status, or first/last seen dates as verified. No pasted sample means backlink data unknown, not zero.
 Each substantive diagnosis must name supplied evidence IDs or the exact dated source and distinguish observation, inference and recommendation. Use P identifiers for pages, I for local issue observations, O for outgoing links and B for pasted rows. Mention incomplete coverage, sample caps and dates. A COMPLETED crawl is not complete coverage of the internet or site. Missing pages/issues from samples are unknown. Treat unverified audit issues as hypotheses needing checks.
 GSC clicks and impressions are sums of this property's saved page rows for the stated period. They are not sessions, visits, market search volume or necessarily property totals. If pagesComplete or queryPagesComplete is false, do not infer totals or absent rankings. A null value means unknown, never zero. Provided real zeros may be reported as zero. Target market does not filter saved evidence. Page/query samples are incomplete. Do not invent traffic, ranking, authority, link counts, referring-domain counts, toxicity scores, keyword difficulty, costs or competitor metrics. Do not promise ranking gains or recommend mass disavowal, removal or buying links from these samples alone.

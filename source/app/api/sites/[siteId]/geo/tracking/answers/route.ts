@@ -2,7 +2,7 @@ import { auth } from "@/lib/auth";
 import { checkOrigin, readJson } from "@/lib/content-planner/http";
 import { db } from "@/lib/db";
 import { geoFailure, NO_STORE, type SiteContext } from "@/lib/geo/http";
-import { deleteManualAnswer, readAnswer, readTrackingWorkspace, recordManualAnswer } from "@/lib/geo/tracking";
+import { deleteManualAnswer, readAnswer, readTrackingWorkspace, recordManualAnswer, reviewAnswer } from "@/lib/geo/tracking";
 
 export const runtime = "nodejs";
 
@@ -25,6 +25,25 @@ export async function POST(req: Request, { params }: SiteContext) {
     const { siteId } = await params;
     const { id } = await recordManualAnswer(db, userId, siteId, await readJson(req, 256 * 1024));
     return Response.json({ id, workspace: await readTrackingWorkspace(db, userId, siteId) }, { headers: NO_STORE });
+  } catch (error) {
+    return geoFailure(error);
+  }
+}
+
+/**
+ * Labels one answer ({id, accuracy, sentiment, note}): accurate, partly or
+ * inaccurate about the brand; positive, neutral or negative. Answers with the
+ * answer as it now reads and the workspace, whose summaries count the labels.
+ */
+export async function PATCH(req: Request, { params }: SiteContext) {
+  try {
+    checkOrigin(req);
+    const userId = (await auth())?.user?.id;
+    const { siteId } = await params;
+    const body = await readJson(req, 16 * 1024);
+    await reviewAnswer(db, userId, siteId, body);
+    const id = typeof (body as { id?: unknown })?.id === "string" ? (body as { id: string }).id : "";
+    return Response.json({ answer: await readAnswer(db, userId, siteId, id), workspace: await readTrackingWorkspace(db, userId, siteId) }, { headers: NO_STORE });
   } catch (error) {
     return geoFailure(error);
   }

@@ -1,4 +1,11 @@
 import { articleExcerpt } from "./article-excerpt";
+import { parseAttrs, tagsNamed } from "./html-attrs";
+import { insecureResources } from "./mixed-content";
+import { geoPageSignals, type GeoPageSignals } from "./geo-signals";
+import { effectiveRedirectHops, redirectIssues, type RedirectHop, type RedirectRecord } from "./redirects";
+import { isHttpUrl, normalizeUrl, originOf, sameHost } from "./urls";
+import { hreflangIssues } from "@/lib/seo/hreflang";
+import { contentUnits, SNIPPET_WIDTH, withinWidth } from "@/lib/text-units";
 import { analyzeStructuredData, type StructuredDataReport } from "@/lib/seo/structured-data";
 import { createHash } from "crypto";
 import type { LookupAddress } from "dns";
@@ -138,6 +145,8 @@ export type PageSnapshot = {
   xRobotsTag: string | null;
   /** Robots-type meta tags and data-nosnippet, for the GEO eligibility check (lib/geo/directives.ts). */
   robotsDirectives?: RobotsDirectives;
+  /** Cited sources, app-shell detection and declared dates, for GEO readiness (lib/crawler/geo-signals.ts). */
+  geoSignals?: GeoPageSignals;
 };
 
 /** [name, content] of the robots, googlebot, googlebot-news, bingbot and msnbot meta tags. */
@@ -159,44 +168,7 @@ export function robotsDirectivesOf(metas: readonly [string, string][], html: str
 /*  URL helpers                                                       */
 /* ------------------------------------------------------------------ */
 
-function normalizeUrl(raw: string, base: string): string | null {
-  try {
-    const u = new URL(raw, base);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    u.hash = "";
-    if (u.pathname.length > 1 && u.pathname.endsWith("/")) {
-      u.pathname = u.pathname.slice(0, -1);
-    }
-    return u.toString();
-  } catch {
-    return null;
-  }
-}
-
-function isHttpUrl(raw: string): boolean {
-  try {
-    const { protocol } = new URL(raw);
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
-function sameHost(a: string, b: string): boolean {
-  try {
-    return (
-      new URL(a).hostname.replace(/^www\./, "") ===
-      new URL(b).hostname.replace(/^www\./, "")
-    );
-  } catch {
-    return false;
-  }
-}
-
-function originOf(url: string): string {
-  const u = new URL(url);
-  return `${u.protocol}//${u.host}`;
-}
+// URL helpers (normalizeUrl, isHttpUrl, sameHost, originOf) live in ./urls.
 
 /* ------------------------------------------------------------------ */
 /*  SSRF protection                                                   */
@@ -345,55 +317,7 @@ function extractTag(html: string, re: RegExp): string | null {
   return m?.[1]?.trim() || null;
 }
 
-/*
- * HTML5 allows three attribute value syntaxes: "double quoted", 'single
- * quoted', and unquoted. Minifiers drop the quotes whenever the value has no
- * spaces, so a real page can serve `<meta content="Some text" name=description>`
- * — `content` keeps its quotes because the value has spaces, `name` loses them.
- * A pattern that only knows the quoted form reports that tag as missing.
- *
- * One attribute: a name, optionally followed by a value in any of the three
- * syntaxes HTML5 allows — "double quoted", 'single quoted', or unquoted. An
- * unquoted value ends only at whitespace or `>`, so query strings survive
- * (`href=/search?q=shoes&page=2`).
- */
-const ATTR_RE = /([^\s"'>/=]+)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s>]+))?/g;
-
-/** Strips the surrounding quotes from a raw attribute value, if any. */
-function unquote(raw: string): string {
-  const q = raw[0];
-  return (q === '"' || q === "'") && raw.length > 1 && raw.endsWith(q)
-    ? raw.slice(1, -1)
-    : raw;
-}
-
-/**
- * Attributes of one tag, lower-cased names, first occurrence winning (browsers
- * ignore later duplicates).
- *
- * Parsed positionally in a single pass rather than searched for by name: a
- * name search matches text inside ANOTHER attribute's value, so
- * `<a onclick="go('href=/tracker')" href="/real">` would yield `/tracker`.
- * Accepts a whole tag or a bare attribute list.
- */
-function parseAttrs(tag: string): Map<string, string> {
-  const body = tag.replace(/^<[^\s/>]*/, "").replace(/\/?>$/, "");
-  const out = new Map<string, string>();
-  for (const m of body.matchAll(ATTR_RE)) {
-    const name = m[1].toLowerCase();
-    if (!out.has(name)) out.set(name, m[2] === undefined ? "" : unquote(m[2]));
-  }
-  return out;
-}
-
-/**
- * Every `<tag …>` in the document. The alternation lets a quoted value contain
- * `>`, which is legal (`<meta content="Before > After" …>`); a plain `[^>]*`
- * envelope would cut the tag in half there and lose the later attributes.
- */
-function tagsNamed(html: string, tag: string): string[] {
-  return html.match(new RegExp(`<${tag}\\b(?:[^>"']|"[^"]*"|'[^']*')*>`, "gi")) ?? [];
-}
+// Tag and attribute readers (parseAttrs, tagsNamed) live in ./html-attrs.
 
 /**
  * Value of `attrName` on the first `<tag>` whose `name` attribute is `value`.
@@ -493,10 +417,10 @@ export function parseHtml(
     (tag) => !parseAttrs(tag).has("alt")
   ).length;
 
-  // Body text and word count
+  // Body text and word count. Words, plus one per CJK character: splitting
+  // on spaces alone counts a whole paragraph of Chinese as one word.
   const bodyText = stripTags(html);
-  const words = bodyText ? bodyText.split(/\s+/).filter(Boolean) : [];
-  const wordCount = words.length;
+  const wordCount = contentUnits(bodyText);
 
   // Content hash
   const contentHash = hashText(bodyText);
@@ -550,11 +474,13 @@ export function parseHtml(
   const indexable = sources.length === 0;
   const robotsDirectives = robotsDirectivesOf(metas, html);
 
-  // Simple on-page content score 0-100
+  // Simple on-page content score 0-100. Title and description lengths are
+  // measured in display width: a CJK character takes the room of two Latin
+  // letters in a search result, so a 30-character Chinese title measures 60.
   let contentScore = 40;
-  if (title && title.length >= 15 && title.length <= 65) contentScore += 15;
+  if (withinWidth(title, SNIPPET_WIDTH.title)) contentScore += 15;
   else if (title) contentScore += 5;
-  if (description && description.length >= 50 && description.length <= 160)
+  if (withinWidth(description, SNIPPET_WIDTH.description))
     contentScore += 15;
   else if (description) contentScore += 5;
   if (h1s.length === 1) contentScore += 15;
@@ -564,6 +490,12 @@ export function parseHtml(
   if (hasSchema) contentScore += 5;
   if (canonical) contentScore += 5;
   contentScore = Math.max(0, Math.min(100, contentScore));
+
+  const schemaReport = analyzeStructuredData(html, { url, title });
+  const geoSignals = geoPageSignals(html, url, {
+    textUnits: wordCount,
+    schemaDates: { published: schemaReport.signals?.published, modified: schemaReport.signals?.modified },
+  });
 
   return {
     url,
@@ -581,7 +513,8 @@ export function parseHtml(
     externalOutlinks: [...new Set(externalOutlinks)],
     links,
     hasSchema,
-    schemaReport: analyzeStructuredData(html, { url, title }),
+    schemaReport,
+    geoSignals,
     hreflangTags,
     imageCount,
     imagesMissingAlt,
@@ -663,6 +596,8 @@ type PublicResponse = {
   done: () => void;
   /** The X-Robots-Tag lines of the final response, kept apart (see raw-headers.ts). */
   xRobotsTag: () => string[];
+  /** Every redirect followed on the way, in order (empty when the first answer was final). */
+  redirects: RedirectHop[];
 };
 
 /**
@@ -679,8 +614,9 @@ export async function fetchPublic(
   let currentUrl = url;
   let priorMs = 0;
   const outer = hooks.signal;
+  const redirects: RedirectHop[] = [];
 
-  for (let redirects = 0; ; redirects++) {
+  for (let hop = 0; ; hop++) {
     outer?.throwIfAborted();
     // A URL that is not http(s), or whose host does not resolve or is
     // private, fails here as a fetch error (a broken link), before robots.txt
@@ -735,15 +671,18 @@ export async function fetchPublic(
           const joined = res.headers.get("x-robots-tag");
           return robotsTag.lines() ?? (joined ? [joined] : []);
         },
+        redirects,
       };
     }
 
     priorMs += Date.now() - started;
     await res.body?.cancel().catch(() => {});
     done();
-    // `redirects` have been followed; this one would make redirects + 1.
-    if (redirects === MAX_REDIRECTS) throw new TooManyRedirectsError();
-    currentUrl = new URL(location, currentUrl).toString();
+    // `hop` redirects have been followed; this one would make hop + 1.
+    if (hop === MAX_REDIRECTS) throw new TooManyRedirectsError();
+    const next = new URL(location, currentUrl).toString();
+    redirects.push({ url: currentUrl, status: res.status, location: next });
+    currentUrl = next;
   }
 }
 
@@ -755,6 +694,7 @@ async function fetchPage(url: string, hooks: HopHooks): Promise<{
   bytes: number;
   contentType: string;
   xRobotsTag: string[];
+  redirects: RedirectHop[];
 }> {
   const r = await fetchPublic(
     url,
@@ -777,6 +717,7 @@ async function fetchPage(url: string, hooks: HopHooks): Promise<{
       bytes,
       contentType,
       xRobotsTag: r.xRobotsTag(),
+      redirects: r.redirects,
     };
   } catch (err) {
     throw r.timedOut() ? new FetchTimeoutError(r.finalUrl) : err;
@@ -1126,6 +1067,8 @@ async function executeCrawl(
   const issues: IssueInput[] = [];
   const pages: PageSnapshot[] = [];
   const allLinks: LinkInfo[] = [];
+  /** Every requested URL that redirected, with its hops (lib/crawler/redirects.ts). */
+  const redirectRecords: RedirectRecord[] = [];
   const visited = new Set<string>();
   const queue: string[] = [seedUrl];
 
@@ -1341,11 +1284,17 @@ async function executeCrawl(
         continue;
       }
 
+      const finalNormalized = normalizeUrl(res.finalUrl, origin) || url;
+      // Kept before the content-type check: a link that redirects to a PDF
+      // still costs a hop.
+      if (res.redirects.length) {
+        redirectRecords.push({ url, finalUrl: finalNormalized, finalStatus: res.statusCode, hops: res.redirects });
+      }
+
       if (!res.contentType.includes("html") && res.statusCode < 400) {
         continue;
       }
 
-      const finalNormalized = normalizeUrl(res.finalUrl, origin) || url;
       const redirectUrl =
         finalNormalized !== url ? finalNormalized : null;
 
@@ -1369,19 +1318,23 @@ async function executeCrawl(
         res.xRobotsTag
       );
 
-      // Mixed content check on raw HTML
-      if (
-        isAudited(page) &&
-        page.url.startsWith("https://") &&
-        /(?:src|href)\s*=\s*["']?http:\/\//i.test(res.html)
-      ) {
-        issues.push({
-          url: page.url,
-          type: "MIXED_CONTENT",
-          severity: "WARNING",
-          message: "Page loads insecure HTTP resources",
-          details: { howToFix: REMEDIATION.MIXED_CONTENT?.howToFix },
-        });
+      // Mixed content: subresources (scripts, styles, images, frames, media,
+      // fonts, form targets) loaded over HTTP. Links to HTTP pages are not.
+      if (isAudited(page) && page.url.startsWith("https://")) {
+        const insecure = insecureResources(res.html);
+        if (insecure.count > 0) {
+          issues.push({
+            url: page.url,
+            type: "MIXED_CONTENT",
+            severity: "WARNING",
+            message: "Page loads insecure HTTP resources",
+            details: {
+              count: insecure.count,
+              samples: insecure.samples,
+              howToFix: REMEDIATION.MIXED_CONTENT?.howToFix,
+            },
+          });
+        }
       }
 
       pages.push(page);
@@ -1499,6 +1452,23 @@ async function executeCrawl(
     });
   }
 
+  /* ---- Redirects: chains, sitemap entries and internal links to them ---- */
+  issues.push(...redirectIssues({
+    records: redirectRecords,
+    links: allLinks,
+    sitemapUrls,
+    seedUrl,
+    howToFix: REMEDIATION.REDIRECT?.howToFix,
+  }));
+
+  /* ---- hreflang: codes, self and return links, alternates that redirect ---- */
+  const redirected = new Map(
+    redirectRecords
+      .filter((r) => effectiveRedirectHops(r.hops).length > 0)
+      .map((r) => [r.url, r.finalUrl] as const)
+  );
+  issues.push(...hreflangIssues(pages, { redirects: redirected, howToFix: REMEDIATION.HREFLANG?.howToFix }));
+
   const robotsReport = robots.report();
 
   /* ---- Compute scores ---- */
@@ -1550,6 +1520,7 @@ async function executeCrawl(
           noindexSource: p.noindexSource,
           xRobotsTag: p.xRobotsTag,
           robotsDirectives: p.robotsDirectives,
+          geoSignals: p.geoSignals,
         })),
       });
     }
@@ -1638,6 +1609,7 @@ async function executeCrawl(
         sitemapUrls: sitemapUrls.length,
         missingFromSitemap: missingFromSitemap.length,
         orphans: orphans.length,
+        redirects: redirected.size,
         noindexPages,
         avgContentScore,
         robots: robotsReport,

@@ -1,6 +1,6 @@
 # A-Border SEO: the web app and the background worker in one image.
 #
-#   docker build -t a-border-seo:1.5.6 .
+#   docker build -t a-border-seo:1.9.2 .
 #
 # The web app listens on port 3000 ("node server.js", the default command);
 # "node worker.cjs" runs the background worker from the same image. The image

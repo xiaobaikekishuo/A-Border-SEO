@@ -24,11 +24,18 @@ describe("reviewable paragraph edits", () => {
     expect(() => validateWorkbenchResult({ ...result, paragraphEdits: [edit] }, "example.com", { ...context, body: source + edit.sourceText })).toThrow("unique exact passage");
     expect(() => validateWorkbenchResult({ ...result, paragraphEdits: [edit, { ...edit, id: "overlap", sourceText: source }] }, "example.com", context)).toThrow("overlap");
   });
-  it("validates links in every proposed field but allows verbatim external URLs in the original excerpt", () => {
+  it("marks outside links in replacements, keeps them in notes and allows URLs of the original excerpt", () => {
     const original = "原文引用 https://outside.example/source 以供核实。";
-    expect(validateWorkbenchResult({ ...result, paragraphEdits: [{ ...edit, sourceText: original }] }, "example.com", { ...context, body: original })).toHaveProperty("paragraphEdits");
-    for (const patch of [ { replacementText: "https://outside.example/invented" }, { reason: "[外链](https://outside.example/invented)" }, { evidence: ["https://outside.example/invented"] }, { verification: ['<img src="https://outside.example/invented">'] } ]) {
-      expect(() => validateWorkbenchResult({ ...result, paragraphEdits: [{ ...edit, ...patch }] }, "example.com", context)).toThrow("verified site URLs");
+    const kept = validateWorkbenchResult({ ...result, paragraphEdits: [{ ...edit, sourceText: original, replacementText: "改写后仍引用 https://outside.example/source 。" }] }, "example.com", { ...context, body: original });
+    expect(kept.paragraphEdits?.[0].replacementText).toBe("改写后仍引用 https://outside.example/source 。");
+    expect(kept.linkReview).toBeUndefined();
+    const marked = validateWorkbenchResult({ ...result, paragraphEdits: [{ ...edit, replacementText: "见 https://outside.example/invented" }] }, "example.com", context);
+    expect(marked.paragraphEdits?.[0].replacementText).toBe("见 〔待核实：outside.example〕");
+    expect(marked.linkReview?.map(entry => [entry.url, entry.action])).toEqual([["https://outside.example/invented", "REPLACED"]]);
+    for (const patch of [{ reason: "[外链](https://outside.example/invented)" }, { evidence: ["https://outside.example/invented"] }, { verification: ['<img src="https://outside.example/invented">'] }]) {
+      const noted = validateWorkbenchResult({ ...result, paragraphEdits: [{ ...edit, ...patch }] }, "example.com", context);
+      expect(noted.paragraphEdits?.[0]).toMatchObject(patch);
+      expect(noted.linkReview?.map(entry => [entry.url, entry.field, entry.action])).toEqual([["https://outside.example/invented", "paragraphEdits", "KEPT_IN_NOTES"]]);
     }
   });
   it("keeps evidence and uncertainty boundaries in the task instructions", () => {

@@ -1,13 +1,47 @@
 import { articleSearchEvidence } from "./article-search-evidence";
 import { Prisma } from "@prisma/client";
 import { ContentError } from "./http";
-import { articleReviewRequestSchema, validateArticleReview } from "./article-review-schema";
+import { ARTICLE_REVIEW_OUTPUT_SCHEMA, articleReviewPrompt, articleReviewRequestSchema, validateArticleReview, type ArticleReviewRequest } from "./article-review-schema";
+import { adLawCandidates, qualityTasks, reviewSignals } from "./review-quality";
 import { briefSchema, dedupeKey } from "./schema";
 import { importablePage, importPageColumns, sameSitePageUrl } from "./page-evidence";
 
 type Tx = Prisma.TransactionClient;
 type Site = { id: string; domain: string };
 const json = (value: unknown) => value as Prisma.InputJsonValue;
+
+// The installed local worker reads at most 65,536 characters per claim response (local-worker/lib.mjs).
+const MAX_CLAIM_CHARS = 65_536;
+const MIN_EXCERPT = 1500;
+export const REVIEW_TOO_LARGE = "Select fewer articles or paste shorter text, then start the review again.";
+function claimChars(request: ArticleReviewRequest) {
+  return JSON.stringify({ managedProtocol: 2, job: { jobId: "x".repeat(100), leaseToken: "x".repeat(36), leaseExpiresAt: "9999-12-31T23:59:59.999Z",
+    prompt: articleReviewPrompt(request), outputSchema: ARTICLE_REVIEW_OUTPUT_SCHEMA } }).length;
+}
+/**
+ * Shortens the article excerpts evenly until the claim fits the worker, and
+ * marks them so the model treats the rest as unseen. Ad-law candidates are
+ * taken again from the shortened text, the only text the model can quote.
+ */
+export function fitReviewRequest(request: ArticleReviewRequest): ArticleReviewRequest {
+  if (claimChars(request) <= MAX_CLAIM_CHARS) return request;
+  const shorten = (cap: number): ArticleReviewRequest => ({ ...request, pages: request.pages.map(page => {
+    if (page.text.length <= cap) return page;
+    const end = /[\uD800-\uDBFF]/.test(page.text[cap - 1] ?? "") ? cap - 1 : cap;
+    const text = page.text.slice(0, end);
+    const signals = page.signals && { ...page.signals, adLaw: page.signals.adLaw === null ? null : adLawCandidates(text) };
+    return { ...page, text, excerptShortened: true, ...(signals ? { signals } : {}) };
+  }) });
+  let best: ArticleReviewRequest | null = null;
+  let low = MIN_EXCERPT, high = Math.max(...request.pages.map(page => page.text.length)) - 1;
+  while (low <= high) {
+    const cap = Math.floor((low + high) / 2);
+    const candidate = shorten(cap);
+    if (claimChars(candidate) <= MAX_CLAIM_CHARS) { best = candidate; low = cap + 1; } else high = cap - 1;
+  }
+  if (!best) throw new ContentError(REVIEW_TOO_LARGE, 422);
+  return best;
+}
 export async function startArticleReview(tx: Tx, site: Site, pageIds: string[], pastedText: Record<string, string>, hostedDeviceId?: string) {
   if (await tx.contentPlanJob.count({ where: { siteId: site.id, status: { in: ["QUEUED", "RUNNING"] } } })) throw new ContentError("A content plan is already queued or running for this site", 409);
   const pillars = await tx.contentPillar.findMany({ where: { siteId: site.id }, orderBy: { createdAt: "asc" }, select: { id: true, title: true, keyword: true, description: true } });
@@ -15,12 +49,12 @@ export async function startArticleReview(tx: Tx, site: Site, pageIds: string[], 
   const crawl = await tx.crawl.findFirst({ where: { siteId: site.id, status: "COMPLETED" }, orderBy: [{ finishedAt: { sort: "desc", nulls: "last" } }, { id: "desc" }], select: { id: true, finishedAt: true } });
   if (!crawl) throw new ContentError("No completed crawl is available for this site", 409);
   const ids = [...new Set(pageIds)];
-  const pages = await tx.auditPage.findMany({ where: { crawlId: crawl.id, id: { in: ids } }, select: { ...importPageColumns, articleText: true, articleHeadings: true } });
+  const pages = await tx.auditPage.findMany({ where: { crawlId: crawl.id, id: { in: ids } }, select: { ...importPageColumns, articleText: true, articleHeadings: true, schemaReport: true, geoSignals: true } });
   if (pages.length !== ids.length) throw new ContentError("Selected articles are no longer in the latest crawl. Reload the inventory.", 409);
   const clusters = await tx.contentCluster.findMany({ where: { siteId: site.id, url: { not: null } }, select: { id: true, url: true, updatedAt: true } });
   const known = await tx.auditPage.findMany({ where: { crawlId: crawl.id, statusCode: 200, indexable: true }, select: { url: true } });
   const searchEvidence = await articleSearchEvidence(tx, site.id, pages.map(page => page.url));
-  const request = articleReviewRequestSchema.parse({
+  const request = fitReviewRequest(articleReviewRequestSchema.parse({
     searchEvidence,
     pages: pages.map(page => {
       const row = importablePage(page, site.domain);
@@ -28,10 +62,13 @@ export async function startArticleReview(tx: Tx, site: Site, pageIds: string[], 
       const text = (pastedText[page.id]?.trim() || page.articleText?.trim() || "").slice(0, 12000);
       if (text.length < 100) throw new ContentError("Article body is missing. Paste at least 100 characters or run a new crawl.", 409);
       const existing = clusters.find(cluster => cluster.url && sameSitePageUrl(cluster.url, site.domain) === row.url);
-      return { pageId: page.id, url: row.url, title: row.title, text, headings: !pastedText[page.id]?.trim() && Array.isArray(page.articleHeadings) ? page.articleHeadings.filter((heading): heading is string => typeof heading === "string") : [], source: pastedText[page.id]?.trim() ? "PASTED" : "CRAWL", existingClusterId: existing?.id ?? null, existingUpdatedAt: existing?.updatedAt.toISOString() ?? null };
+      const source = pastedText[page.id]?.trim() ? "PASTED" as const : "CRAWL" as const;
+      const headings = source === "CRAWL" && Array.isArray(page.articleHeadings) ? page.articleHeadings.filter((heading): heading is string => typeof heading === "string") : [];
+      const signals = reviewSignals({ text, headings, source, schemaReport: page.schemaReport, geoSignals: page.geoSignals, crawlAt: crawl.finishedAt });
+      return { pageId: page.id, url: row.url, title: row.title, text, headings, source, existingClusterId: existing?.id ?? null, existingUpdatedAt: existing?.updatedAt.toISOString() ?? null, signals };
     }), pillars, crawlAt: crawl.finishedAt?.toISOString() ?? null,
     allowedInternalLinks: known.flatMap(page => { const url = sameSitePageUrl(page.url, site.domain); return url ? [url] : []; }),
-  });
+  }));
   const job = await tx.contentPlanJob.create({ data: { siteId: site.id, hostedDeviceId, pillarId: pillars[0].id, kind: "ARTICLE_REVIEW", topicCount: ids.length, activeKey: site.id, request: json(request) }, select: { id: true } });
   return { ok: true, job };
 }
@@ -55,7 +92,7 @@ export async function applyArticleReview(tx: Tx, site: Site, jobId: string, page
     if (!old && await tx.contentCluster.findFirst({ where: { siteId: site.id, url: page.url } })) throw new ContentError("This article was imported after the review started. Generate a new review.", 409);
     const key = dedupeKey(article.keyword);
     if (await tx.contentCluster.findFirst({ where: { pillarId: article.pillarId, dedupeKey: key, ...(old ? { id: { not: old.id } } : {}) } })) throw new ContentError("A topic with this keyword already exists in the selected pillar", 409);
-    const brief = { summary: article.reason, audience: "Existing article readers", searchIntent: article.keyword, angle: article.reason, outline: [...page.headings.slice(0, 10), "Update tasks"], keyPoints: [...article.keep.map(value => `KEEP: ${value}`.slice(0, 1000)), ...article.add.map(value => `ADD: ${value}`.slice(0, 1000)), ...article.rewrite.map(value => `REWRITE: ${value}`.slice(0, 1000))].slice(0, 15), cta: "Review the proposed changes, then update the website in your CMS.", internalLinks: article.internalLinks.map(link => ({ target: link.target, title: link.anchor, reason: `${link.sourceSection}: ${link.reason}`.slice(0, 1000) })), evidenceNotes: [`Body source: ${page.source}; excerpt up to 12000 characters.`, `Classification confidence: ${article.confidence}.`, `Source URL: ${page.url}`.slice(0, 1500)] };
+    const brief = { summary: article.reason, audience: "Existing article readers", searchIntent: article.keyword, angle: article.reason, outline: [...page.headings.slice(0, 10), "Update tasks"], keyPoints: [...article.keep.map(value => `KEEP: ${value}`.slice(0, 1000)), ...article.add.map(value => `ADD: ${value}`.slice(0, 1000)), ...article.rewrite.map(value => `REWRITE: ${value}`.slice(0, 1000)), ...qualityTasks(article.quality, page.signals, article.adLaw)].slice(0, 15), cta: "Review the proposed changes, then update the website in your CMS.", internalLinks: article.internalLinks.map(link => ({ target: link.target, title: link.anchor, reason: `${link.sourceSection}: ${link.reason}`.slice(0, 1000) })), evidenceNotes: [`Body source: ${page.source}; excerpt up to 12000 characters.`, `Classification confidence: ${article.confidence}.`, `Source URL: ${page.url}`.slice(0, 1500)] };
     if (!brief.keyPoints.length) brief.keyPoints.push("No specific text changes proposed; verify the classification.");
     briefSchema.parse(brief);
     const optimization = { acceptedAt: now.toISOString(), sourceUrl: page.url, bodySource: page.source, crawlAt: request.crawlAt, review: article, previousBrief: old?.brief ?? null, websiteUpdatedAt: null };

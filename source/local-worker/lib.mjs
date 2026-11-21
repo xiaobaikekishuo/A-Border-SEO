@@ -14,7 +14,16 @@ export const LIMITS = Object.freeze({
   // Leaves room in the 512 KiB request the server accepts for complete/fail.
   answerBytes: 500_000,
   apiResponseBytes: 65_536,
+  // Codex app-server output read while checking the allowance.
+  appServerBytes: 262_144,
 });
+// How often the allowance is read while waiting for work, and how long one reading may take.
+export const LIMITS_EVERY_MS = 5 * 60_000;
+export const APP_SERVER_TIMEOUT_MS = 20_000;
+// After a server that does not take readings (before 1.9.0), ask again this much later.
+export const LIMITS_RETRY_MS = 60 * 60_000;
+// What this worker understands in a claim besides the job itself.
+export const CAPABILITIES = ["routing-v1"];
 export const HEARTBEAT_MS = 10_000;
 export const POLL_MS = 5_000;
 export const API_TIMEOUT_MS = 12_000;
@@ -139,6 +148,7 @@ export function generateToken() {
   return randomBytes(32).toString("base64url");
 }
 
+const MODEL_PATTERN = /^[A-Za-z0-9._:-]{1,100}$/;
 /** A claim response's job, or null for no job. Anything malformed is refused before Codex runs. */
 export function validateClaim(body) {
   if (!body || typeof body !== "object" || !("job" in body)) throw new Error("invalid_claim");
@@ -148,7 +158,10 @@ export function validateClaim(body) {
     || !JOB_ID_PATTERN.test(job.jobId) || !LEASE_PATTERN.test(job.leaseToken)) throw new Error("invalid_claim");
   const provider = job.provider === undefined ? "CODEX_LOCAL" : job.provider;
   if (typeof provider !== "string") throw new Error("invalid_claim");
-  return { jobId: job.jobId, leaseToken: job.leaseToken, provider, prompt: typeof job.prompt === "string" ? job.prompt : "", outputSchema: job.outputSchema };
+  // The owner's model and reasoning effort for this kind of task; a malformed hint is ignored, not trusted.
+  const model = typeof job.model === "string" && MODEL_PATTERN.test(job.model) ? job.model : null;
+  const reasoning = typeof job.reasoning === "string" && REASONING.has(job.reasoning) ? job.reasoning : null;
+  return { jobId: job.jobId, leaseToken: job.leaseToken, provider, prompt: typeof job.prompt === "string" ? job.prompt : "", outputSchema: job.outputSchema, model, reasoning };
 }
 
 /** The schema text Codex receives, or invalid_output_schema. Remote references are refused. */
@@ -165,11 +178,11 @@ export function promptText(prompt) {
 }
 
 /** Settings forced on Codex for every job, whatever its own config says. */
-function configOverrides(config) {
+function configOverrides(config, reasoning = config.reasoning) {
   return [
     'forced_login_method="chatgpt"', 'cli_auth_credentials_store="file"', 'model_provider="openai"',
     "model_providers.openai.supports_websockets=false", 'web_search="disabled"', "mcp_servers={}", "apps._default.enabled=false",
-    "project_doc_max_bytes=0", `model_reasoning_effort="${config.reasoning}"`,
+    "project_doc_max_bytes=0", `model_reasoning_effort="${REASONING.has(reasoning) ? reasoning : config.reasoning}"`,
   ];
 }
 
@@ -181,16 +194,89 @@ export function loginArgs() {
 export function signInArgs() {
   return [...LOGIN_OVERRIDES, "login"];
 }
+/**
+ * Codex's app-server over stdio, used only to read the allowance and the
+ * model list (account/rateLimits/read, model/list): no thread is started and
+ * no message is sent, so reading costs nothing.
+ */
+export function appServerArgs() {
+  return ["--no-daemon", ...LOGIN_OVERRIDES, "-c", "mcp_servers={}", "-c", "apps._default.enabled=false", "-c", 'web_search="disabled"', "app-server"];
+}
+/** The requests of one reading, after the server answered initialize. */
+export function appServerRequests() {
+  return [
+    { method: "initialized", params: {} },
+    { method: "account/rateLimits/read", id: 1 },
+    { method: "model/list", id: 2, params: { limit: 50, includeHidden: false } },
+  ];
+}
+export function appServerInitialize() {
+  return { method: "initialize", id: 0, params: { clientInfo: { name: "aborder_seo_worker", title: "A-Border SEO worker", version: "1" } } };
+}
 
-/** Arguments for one non-interactive, read-only, tool-free draft; the prompt arrives on stdin. */
-export function execArgs(config, jobDirectory) {
+function limitWindow(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const used = Number(raw.usedPercent ?? raw.used_percent);
+  if (!Number.isFinite(used) || used < 0) return null;
+  const minutes = raw.windowDurationMins ?? raw.window_minutes ?? raw.windowMinutes;
+  const resets = raw.resetsAt ?? raw.resets_at;
+  return {
+    usedPercent: Math.min(100, Math.round(used * 10) / 10),
+    windowMinutes: Number.isSafeInteger(minutes) && minutes > 0 && minutes <= 525_600 ? minutes : null,
+    resetsAt: Number.isSafeInteger(resets) && resets > 0 ? resets : null,
+  };
+}
+/** The Codex bucket of an account/rateLimits/read result, in the shape the server stores; null when unreadable. */
+export function parseRateLimits(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return null;
+  const byId = result.rateLimitsByLimitId && typeof result.rateLimitsByLimitId === "object" ? result.rateLimitsByLimitId.codex : null;
+  const snapshot = byId && typeof byId === "object" ? byId : result.rateLimits;
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) return null;
+  const primary = limitWindow(snapshot.primary), secondary = limitWindow(snapshot.secondary);
+  if (!primary && !secondary) return null;
+  const plan = snapshot.planType ?? result.planType;
+  const credits = snapshot.credits ?? result.credits;
+  return {
+    planType: typeof plan === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(plan) ? plan : null,
+    primary, secondary,
+    reached: snapshot.rateLimitReachedType !== undefined && snapshot.rateLimitReachedType !== null,
+    hasCredits: credits && typeof credits === "object" && !Array.isArray(credits) && typeof credits.hasCredits === "boolean" ? credits.hasCredits : null,
+  };
+}
+/** Models this Codex account offers (model/list), for the owner's per-task choice. */
+export function parseModels(result) {
+  const data = result && Array.isArray(result.data) ? result.data : [];
+  const models = [];
+  for (const item of data) {
+    if (!item || typeof item !== "object" || item.hidden === true) continue;
+    const id = typeof item.model === "string" ? item.model : item.id;
+    if (typeof id !== "string" || !MODEL_PATTERN.test(id) || models.some(model => model.id === id)) continue;
+    const efforts = Array.isArray(item.supportedReasoningEfforts) ? item.supportedReasoningEfforts
+      .map(entry => typeof entry === "string" ? entry : entry?.reasoningEffort).filter(value => REASONING.has(value)) : [];
+    models.push({
+      id, name: typeof item.displayName === "string" ? item.displayName.replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 80) || id : id,
+      isDefault: item.isDefault === true, efforts: [...new Set(efforts)],
+      defaultEffort: REASONING.has(item.defaultReasoningEffort) ? item.defaultReasoningEffort : null,
+    });
+    if (models.length >= 30) break;
+  }
+  return models;
+}
+
+/**
+ * Arguments for one non-interactive, read-only, tool-free draft; the prompt
+ * arrives on stdin. hint: the model and reasoning effort the owner chose for
+ * this kind of task (already checked by validateClaim); else the worker's own.
+ */
+export function execArgs(config, jobDirectory, hint = {}) {
   const args = ["--no-daemon", "--ask-for-approval", "never", "exec", "--ignore-user-config", "--strict-config", "--sandbox", "read-only",
     "--skip-git-repo-check", "--ephemeral", "--json", "--color", "never", "-C", jobDirectory,
     "--output-schema", join(jobDirectory, "schema.json"), "--output-last-message", join(jobDirectory, "answer.json")];
-  for (const setting of configOverrides(config)) args.push("-c", setting);
+  for (const setting of configOverrides(config, hint.reasoning ?? config.reasoning)) args.push("-c", setting);
   for (const feature of config.disabledFeatures) args.push("--disable", feature);
   args.push("--enable", "skip_host_skill_discovery");
-  if (config.model) args.push("--model", config.model);
+  const model = hint.model ?? config.model;
+  if (model && MODEL_PATTERN.test(model)) args.push("--model", model);
   args.push(...config.extraArgs, "-");
   return args;
 }

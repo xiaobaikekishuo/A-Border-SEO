@@ -55,13 +55,15 @@ ABORDER_SEO_URL=http://localhost:3300 node packages/mcp/dist/cli.js --http --por
 | `get_traffic` | 每日点击和曝光，最近 N 天或指定日期范围 |
 | `list_crawls` | 最近的抓取：状态、页面数、问题数和健康分 |
 | `get_crawl_issues` | 某次抓取（默认最近一次完成的）的问题，按严重程度 |
-| `get_vitals` | 网页性能报告：性能分、LCP、CLS、INP、TTFB |
+| `get_vitals` | 网页性能报告：性能分、实验室 LCP、CLS、TBT、TTFB，以及 Chrome 真实用户数据（p75 的 LCP、INP、CLS） |
 | `get_opportunities` | 临近首页、低 CTR、内容衰退和关键词互相竞争 |
 | `get_bing_traffic` | Bing 每日点击、曝光、抓取页数，以及已收录页面数和抓取错误数 |
 | `get_bing_keywords` | Bing 热门查询，按截止日期落在区间内的周汇总 |
 | `get_bing_pages` | Bing 热门页面，汇总方式同上 |
 | `get_saved_keywords` | 已保存关键词、备注和 Search Console 汇总 |
+| `get_rankings` | 排名追踪：追踪词的实测 Google 名次、变化、排名页面、AI 概览，以及 Search Console 平均排名 |
 | `get_ai_visibility` | 各 AI 平台的 GEO 六层情况（访问、页面指令、索引、平台报表、回答提及与引用、流量） |
+| `get_citation_gaps` | 引用缺口：AI 回答点名竞品、没提到品牌时引用的第三方网站，附提示词和被引用页面 |
 
 ## 许可证
 

@@ -56,3 +56,15 @@ it("schedules prompt tracking unless SCHEDULE_GEO_TRACKING is false", () => {
   expect(scheduleConfig({ SCHEDULE_GEO_TRACKING: " FALSE " }).geoTracking).toBe(false);
   expect(scheduleConfig({ SCHEDULE_GEO_TRACKING: "true" }).geoTracking).toBe(true);
 });
+
+it("schedules rank checks unless SCHEDULE_RANK_TRACKING is false", () => {
+  expect(scheduleConfig({}).rankTracking).toBe(true);
+  expect(scheduleConfig({ SCHEDULE_RANK_TRACKING: " False" }).rankTracking).toBe(false);
+  expect(scheduleConfig({ SCHEDULE_GEO_TRACKING: "false" }).rankTracking).toBe(true);
+});
+
+it("writes the weekly AI action list unless SCHEDULE_WEEKLY_AI_REPORT is false", () => {
+  expect(scheduleConfig({}).weeklyAiReport).toBe(true);
+  expect(scheduleConfig({ SCHEDULE_WEEKLY_AI_REPORT: " FALSE" }).weeklyAiReport).toBe(false);
+  expect(scheduleConfig({ SCHEDULE_RANK_TRACKING: "false" }).weeklyAiReport).toBe(true);
+});

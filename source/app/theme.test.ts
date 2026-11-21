@@ -56,15 +56,15 @@ describe("fixed dark theme", () => {
   it("uses dark native controls and a matching browser and installed-app background", () => {
     expect(css).toMatch(/html\s*\{[^}]*color-scheme:\s*dark/);
     expect(layout).toMatch(/colorScheme:\s*"dark"/);
-    expect(layout).toMatch(/themeColor:\s*"#080e1c"/i);
-    expect(manifest).toMatch(/theme_color:\s*"#080e1c"/i);
-    expect(manifest).toMatch(/background_color:\s*"#080e1c"/i);
+    expect(layout).toMatch(/themeColor:\s*"#0b0d11"/i);
+    expect(manifest).toMatch(/theme_color:\s*"#0b0d11"/i);
+    expect(manifest).toMatch(/background_color:\s*"#0b0d11"/i);
   });
 
-  it("paints the body and cards with the navy palette", () => {
+  it("paints the body and cards with the graphite palette", () => {
     expect(css).toMatch(/body\s*\{[^}]*bg-background/);
-    expect(token("--background").toLowerCase()).toBe("#080e1c");
-    expect(token("--card").toLowerCase()).toBe("#101a2d");
+    expect(token("--background").toLowerCase()).toBe("#0b0d11");
+    expect(token("--card").toLowerCase()).toBe("#12151b");
     expect(token("--primary").toLowerCase()).toBe("#6d5ce8");
   });
 
@@ -81,7 +81,7 @@ describe("fixed dark theme", () => {
       expect(contrast(token(`--${state}`), token(`--${state}-bg`)), `${state} label`).toBeGreaterThanOrEqual(4.5);
     }
     expect(token("--chart-1")).not.toBe(token("--chart-2"));
-    for (const series of ["--chart-1", "--chart-2"]) {
+    for (const series of ["--chart-1", "--chart-2", "--chart-previous"]) {
       expect(contrast(token(series), token("--card")), `${series} on card`).toBeGreaterThanOrEqual(3);
     }
   });
@@ -128,6 +128,10 @@ describe("fonts", () => {
 
   it("maps the theme fonts to those variables with sans and monospace fallbacks", () => {
     expect(css).toMatch(/--font-sans:\s*var\(--font-inter\),[^;]*\bsans-serif;/);
+    // Chinese text gets the system's UI face before any generic fallback.
+    expect(css).toMatch(/--font-sans:[^;]*"PingFang SC"[^;]*"Microsoft YaHei"[^;]*\bsans-serif;/);
+    // Figures line up through tabular numerals in the text face, not a monospace font.
+    expect(css).toMatch(/\.font-data\s*\{[^}]*font-family:\s*var\(--font-sans\);[^}]*tabular-nums/);
     expect(css).toMatch(/--font-mono:\s*var\(--font-geist-mono\),[^;]*\bmonospace;/);
     expect(css).toMatch(/html\s*\{[^}]*font-sans/);
   });

@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { getSitePeriodMetrics } from "@/lib/seo-metrics";
 import { getContentDecay } from "@/lib/seo-opportunities";
 import { getNoindexWarning } from "@/lib/crawler/noindex-warning";
+import { latestRankDrops } from "@/lib/rank-tracking/tracking";
 import type { AlertType, Prisma } from "@prisma/client";
 
 export type AlertFire = {
@@ -71,6 +72,23 @@ export async function evaluateAlertsForUser(
         }
       }
 
+      if (alert.type === "RANK_DROP") {
+        // Once per finished rank check run: a run older than the last firing has fired already.
+        const threshold = Math.max(1, Math.round(Math.abs(config.thresholdPositions ?? 5)));
+        const latest = await latestRankDrops(db, alert.siteId, threshold, alert.lastFired);
+        if (latest && latest.drops.length) {
+          const shown = latest.drops.slice(0, 3).map((d) => `"${d.keyword}" ${d.from} → ${d.to ?? "not ranked"}`).join(", ");
+          const more = latest.drops.length > 3 ? ` and ${latest.drops.length - 3} more` : "";
+          fires.push({
+            alertId: alert.id,
+            type: alert.type,
+            siteId: alert.siteId,
+            domain: alert.site.domain,
+            message: `${latest.drops.length} tracked keyword${latest.drops.length === 1 ? "" : "s"} dropped on ${alert.site.domain}: ${shown}${more}`,
+          });
+        }
+      }
+
       if (alert.type === "CRAWL_ISSUES") {
         const latest = await db.crawl.findFirst({
           where: { siteId: alert.siteId, status: "COMPLETED" },
@@ -111,8 +129,11 @@ export async function evaluateAlertsForUser(
           orderBy: { date: "desc" },
           take: 5,
         });
+        // Lab values, plus the real-user p75 when the report has it: field
+        // INP is the only INP there is (Lighthouse cannot measure it).
         const bad = recent.filter(
-          (v) => (v.lcp && v.lcp > 2.5) || (v.cls && v.cls > 0.1) || (v.perfScore && v.perfScore < 50)
+          (v) => (v.lcp && v.lcp > 2.5) || (v.cls && v.cls > 0.1) || (v.perfScore && v.perfScore < 50) ||
+            (v.fieldLcp != null && v.fieldLcp > 2.5) || (v.fieldInp != null && v.fieldInp > 200) || (v.fieldCls != null && v.fieldCls > 0.1)
         );
         if (bad.length >= 2) {
           fires.push({
@@ -158,6 +179,8 @@ const DEFAULT_ALERTS: { type: AlertType; config: Prisma.InputJsonValue }[] = [
   { type: "CRAWL_ISSUES", config: {} },
   { type: "VITALS_DEGRADED", config: {} },
   { type: "NOINDEX_SITEWIDE", config: {} },
+  // Fires only for sites with rank tracking: a keyword 5 places down, or off the first page.
+  { type: "RANK_DROP", config: { thresholdPositions: 5 } },
 ];
 
 /**

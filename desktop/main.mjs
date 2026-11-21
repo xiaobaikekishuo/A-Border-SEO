@@ -140,7 +140,7 @@ async function refresh() {
 
 function newWindow(options, preload, extra = {}) {
   return new BrowserWindow({
-    show: false, icon: iconFile, backgroundColor: "#090f25", ...options,
+    show: false, icon: iconFile, backgroundColor: "#0b0d11", ...options,
     webPreferences: {
       preload: path.join(root, preload), contextIsolation: true, sandbox: true,
       nodeIntegration: false, webSecurity: true, devTools: !app.isPackaged, ...extra,

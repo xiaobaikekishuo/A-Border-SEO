@@ -25,6 +25,8 @@ import { ApiError } from "./params";
  * GET /api/v1/sites/{siteId}/bing/pages            the same for pages
  * GET /api/v1/sites/{siteId}/saved-keywords       saved keywords with their totals, ?days= or ?startDate=&endDate=
  * GET /api/v1/sites/{siteId}/ai-visibility        every AI platform on the six GEO layers, and the latest tracking run
+ * GET /api/v1/sites/{siteId}/rankings             tracked keywords with their measured Google position, and the latest rank check run
+ * GET /api/v1/sites/{siteId}/citation-gaps        sites AI answers cite while naming competitors and not the brand
  */
 
 const PREFIX = "/api/v1/";
@@ -88,6 +90,10 @@ async function route(owner: KeyOwner, segments: string[], params: URLSearchParam
         return read.savedKeywords(site, params);
       case "ai-visibility":
         return read.aiVisibility(site, userId);
+      case "rankings":
+        return read.rankings(site, userId);
+      case "citation-gaps":
+        return read.citationGaps(site, userId);
     }
   }
   if (segments.length === 4 && resource === "bing") {

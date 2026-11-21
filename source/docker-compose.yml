@@ -5,7 +5,7 @@
 # the local Codex helpers on top of the same image.
 services:
   app:
-    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.5.6}
+    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.9.2}
     build: .
     restart: always
     # Schema migrations first, then the web app. Back up the database before
@@ -42,7 +42,7 @@ services:
   # Runs queued jobs (crawls, vitals checks, GSC and Bing syncs, alerts) and
   # the schedule, from the same image. Serves no HTTP.
   worker:
-    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.5.6}
+    image: ${ABORDER_SEO_IMAGE:-a-border-seo:1.9.2}
     build: .
     restart: always
     command: ["node", "worker.cjs"]

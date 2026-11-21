@@ -24,6 +24,7 @@ import {
   Layers3,
   ScanSearch,
   Activity,
+  ListOrdered,
   LoaderCircle,
   type LucideIcon,
 } from "lucide-react";
@@ -61,6 +62,7 @@ export function SidebarNav({
           { href: `/sites/${activeSiteId}`, label: ui("Overview"), icon: LayoutDashboard, exact: true },
           { href: `/sites/${activeSiteId}/keywords`, label: ui("Keywords"), icon: Search },
           { href: `/sites/${activeSiteId}/saved-keywords`, label: ui("Saved keywords"), icon: Bookmark },
+          { href: `/sites/${activeSiteId}/rankings`, label: t("Rank tracking", "排名追踪"), icon: ListOrdered },
           { href: `/sites/${activeSiteId}/pages`, label: ui("Pages"), icon: FileText },
           { href: `/sites/${activeSiteId}/bing`, label: t("Bing reports", "Bing 报表"), icon: Activity },
           { href: `/sites/${activeSiteId}/crawl`, label: ui("Crawl / Audit"), icon: Bug },
@@ -105,11 +107,11 @@ export function SidebarNav({
   if (groups.length === 0) return null;
 
   return (
-    <nav aria-label={ui("Main")} className={cn("flex flex-col gap-6", collapsed && "items-center")}>
+    <nav aria-label={ui("Main")} className={cn("flex flex-col gap-5", collapsed && "items-center")}>
       {groups.map((group) => (
-        <div key={group.label} className="flex flex-col gap-1">
+        <div key={group.label} className="flex flex-col gap-0.5">
           {!collapsed && (
-            <p className="px-3 pb-2 font-data text-[10px] font-medium leading-4 tracking-[0.14em] text-text-soft uppercase">
+            <p className="px-3 pb-1.5 text-[11.5px] font-medium leading-4 tracking-[0.04em] text-text-faint">
               {ui(group.label)}
             </p>
           )}
@@ -152,8 +154,8 @@ function SidebarLink({
         className={cn(
           "flex size-10 items-center justify-center rounded-lg border border-transparent transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
           active
-            ? "border-primary/35 bg-primary/15 text-primary"
-            : "text-muted-foreground hover:border-border hover:bg-bg-section hover:text-text-strong"
+            ? "bg-bg-section text-brand-700"
+            : "text-muted-foreground hover:bg-bg-section/70 hover:text-text-strong"
         )}
       >
         <SidebarLinkContent item={item} active={active} collapsed />
@@ -166,10 +168,10 @@ function SidebarLink({
       href={item.href}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group flex h-[38px] items-center gap-2.5 rounded-lg border border-transparent px-3 text-[13px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+        "group flex h-9 items-center gap-2.5 rounded-lg border border-transparent px-3 text-[13.5px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
         active
-          ? "border-primary/35 bg-primary/15 font-medium text-text-strong shadow-[inset_3px_0_0_var(--primary)]"
-          : "text-muted-foreground hover:border-border hover:bg-bg-section hover:text-text-strong"
+          ? "bg-bg-section font-medium text-text-strong"
+          : "text-text hover:bg-bg-section/70 hover:text-text-strong"
       )}
     >
       <SidebarLinkContent item={item} active={active} collapsed={false} />
@@ -193,7 +195,7 @@ function SidebarLinkContent({ item, active, collapsed }: { item: NavItem; active
         className={cn("flex min-w-0 flex-1 items-center gap-2.5", collapsed && "justify-center", pending && "text-primary")}
       >
         <Icon
-          className={cn("size-4 shrink-0 transition-colors", pending && "motion-safe:animate-spin", active || pending ? "text-primary" : "text-text-soft group-hover:text-text")}
+          className={cn("size-4 shrink-0 transition-colors", pending && "motion-safe:animate-spin", pending ? "text-primary" : active ? "text-brand-700" : "text-text-faint group-hover:text-text")}
           aria-hidden
         />
         {!collapsed && <span className="truncate">{label}</span>}

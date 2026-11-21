@@ -12,8 +12,8 @@ export default async function manifest(): Promise<MetadataRoute.Manifest> {
     lang: htmlLanguage(locale),
     start_url: "/sites",
     display: "standalone",
-    theme_color: "#080e1c",
-    background_color: "#080e1c",
+    theme_color: "#0b0d11",
+    background_color: "#0b0d11",
     icons: [
       { src: "/brand/a-border-symbol.svg", sizes: "any", type: "image/svg+xml", purpose: "any" },
       { src: "/brand/a-border-symbol-192.png", sizes: "192x192", type: "image/png", purpose: "any" },

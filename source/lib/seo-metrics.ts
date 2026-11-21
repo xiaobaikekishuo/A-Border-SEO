@@ -78,7 +78,7 @@ function aggregatePeriod(
   };
 }
 
-type ReportDay = { date: string; clicks: number; impressions: number; position: number };
+export type ReportDay = { date: string; clicks: number; impressions: number; position: number };
 
 /** Select one basis for the whole period, from the currently bound property only. */
 async function loadSearchSeries(tx: Prisma.TransactionClient, siteId: string, period: Period) {
@@ -99,17 +99,14 @@ async function loadSearchSeries(tx: Prisma.TransactionClient, siteId: string, pe
       clicks: day.propertyClicks, impressions: day.propertyImpressions, position: day.propertyPosition }] : []);
   } else {
     const dates = coverage.filter(day => day.pagesComplete).map(day => day.date);
-    const pages = dates.length ? await tx.page.findMany({ where: { siteId, date: { in: dates } },
-      select: { date: true, clicks: true, impressions: true, position: true }, orderBy: { date: "asc" } }) : [];
-    const totals = new Map<string, { clicks: number; impressions: number; weighted: number }>();
-    for (const page of pages) {
-      const date = label(page.date);
-      const day = totals.get(date) ?? { clicks: 0, impressions: 0, weighted: 0 };
-      day.clicks += page.clicks; day.impressions += page.impressions; day.weighted += page.position * page.impressions;
-      totals.set(date, day);
-    }
-    rows = Array.from(totals, ([date, day]) => ({ date, clicks: day.clicks, impressions: day.impressions,
-      position: day.impressions > 0 ? day.weighted / day.impressions : 0 }));
+    // Summed per day in Postgres: one row per day leaves the database, not one per page and day.
+    const days = dates.length ? await tx.$queryRaw<{ date: Date; clicks: number; impressions: number; weighted: number }[]>`
+      SELECT date, SUM(clicks)::float8 AS clicks, SUM(impressions)::float8 AS impressions,
+        SUM(position * impressions)::float8 AS weighted
+      FROM "Page" WHERE "siteId" = ${siteId} AND date IN (${Prisma.join(dates)})
+      GROUP BY date ORDER BY date` : [];
+    rows = days.map(day => ({ date: label(new Date(day.date)), clicks: Number(day.clicks), impressions: Number(day.impressions),
+      position: Number(day.impressions) > 0 ? Number(day.weighted) / Number(day.impressions) : 0 }));
   }
   return { basis, rows, coverage };
 }
@@ -123,9 +120,13 @@ export async function getSitePeriodMetrics(siteId: string, days = 28) {
     const currentStart = new Date(windows.current.start);
     const currentDates = series.coverage.filter(day => day.date >= currentStart);
     const previousDates = series.coverage.filter(day => day.date < currentStart);
+    // Counted in Postgres: the distinct queries themselves never leave the database.
     const keywordCount = async (dates: typeof currentDates) => {
       const known = dates.filter(day => day.queryPagesComplete).map(day => day.date);
-      return known.length ? (await tx.keyword.groupBy({ by: ["query"], where: { siteId, date: { in: known } } })).length : 0;
+      if (!known.length) return 0;
+      const [row] = await tx.$queryRaw<{ count: number }[]>`
+        SELECT COUNT(DISTINCT query)::int AS count FROM "Keyword" WHERE "siteId" = ${siteId} AND date IN (${Prisma.join(known)})`;
+      return Number(row?.count ?? 0);
     };
     const current = aggregatePeriod(currentRows, await keywordCount(currentDates));
     const previous = aggregatePeriod(previousRows, await keywordCount(previousDates));
@@ -217,6 +218,11 @@ export async function getDailyTrafficSeries(siteId: string, period: Period = 90)
     const { basis, rows } = await loadSearchSeries(tx, siteId, period);
     return { basis, days: rows.map(({ date, clicks, impressions }) => ({ date, clicks, impressions })) };
   }, { isolationLevel: "RepeatableRead" });
+}
+
+/** Daily totals with the average position, on the same basis as the period metrics: the overview's sparklines. */
+export async function getDailySearchRows(siteId: string, period: Period = 28): Promise<ReportDay[]> {
+  return db.$transaction(async tx => (await loadSearchSeries(tx, siteId, period)).rows, { isolationLevel: "RepeatableRead" });
 }
 
 export async function getDailyTraffic(siteId: string, period: Period = 90): Promise<DailyTraffic[]> {

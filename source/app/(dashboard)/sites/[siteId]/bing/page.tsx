@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { BingSiteSection } from "@/components/settings/bing-site-section";
 import { BingReportView } from "@/components/bing/report-view";
 import { BingSyncButton } from "@/components/sites/bing-sync-button";
+import { IndexNowPanel } from "@/components/bing/indexnow-panel";
 
 export default async function BingReportPage({ params, searchParams }: {
   params: Promise<{ siteId: string }>;
@@ -55,5 +56,7 @@ export default async function BingReportPage({ params, searchParams }: {
         {syncAllowed && <BingSiteSection siteId={siteId} bingSite={null} />}
       </div>
       : report && <BingReportView key={siteId} siteId={siteId} domain={site.domain} report={report} />}
+    {/* IndexNow needs no Bing key: it is a separate protocol Bing takes part in. */}
+    <IndexNowPanel key={`indexnow:${siteId}`} siteId={siteId} disabled={!syncAllowed} />
   </div>;
 }

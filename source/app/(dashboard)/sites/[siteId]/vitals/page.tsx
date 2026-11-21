@@ -33,7 +33,7 @@ export default async function VitalsPage({ params }: Props) {
     <div>
       <PageHeader
         title={t("Core Web Vitals", "核心网页指标")}
-        description={t("PageSpeed Insights lab data for your top pages. Set GOOGLE_PAGESPEED_KEY for a higher quota.", "主要页面的 PageSpeed Insights 实验室数据。配置 GOOGLE_PAGESPEED_KEY 可提高配额。")}
+        description={t("PageSpeed Insights for your top pages: Lighthouse lab values, and real-user field data (Chrome UX Report, p75 of the last 28 days) where Chrome has enough visits. Lighthouse cannot measure INP; TBT is its lab stand-in, and only field data can pass Core Web Vitals. Set GOOGLE_PAGESPEED_KEY for a higher quota.", "主要页面的 PageSpeed Insights 数据：Lighthouse 实验室数据，以及 Chrome 访问量足够时的真实用户数据（Chrome 用户体验报告，过去 28 天的第 75 百分位）。Lighthouse 无法测量 INP，TBT 是它的实验室替代指标；只有真实用户数据才能判定核心网页指标是否达标。配置 GOOGLE_PAGESPEED_KEY 可提高配额。")}
         actions={<>
           <VitalsButton siteId={siteId} />
           <ReportAnalysisLink siteId={siteId} scope="performance" t={t} />
@@ -56,6 +56,11 @@ export default async function VitalsPage({ params }: Props) {
             cls: r.cls,
             inp: r.inp,
             ttfb: r.ttfb,
+            tbt: r.tbt,
+            fieldSource: r.fieldSource === "URL" || r.fieldSource === "ORIGIN" ? r.fieldSource : null,
+            fieldLcp: r.fieldLcp,
+            fieldInp: r.fieldInp,
+            fieldCls: r.fieldCls,
             date: r.date.toISOString(),
           }))}
         />
