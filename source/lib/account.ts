@@ -81,7 +81,7 @@ export async function disconnectGoogle(db: Db, userId: string): Promise<RevokeRe
  * row: every user-owned table (accounts, sessions, API keys, alerts, sites and
  * all site data) cascades from it.
  */
-export async function deleteAccount(db: Db, userId: string): Promise<RevokeResult> {
+export async function deleteAccount(db: Db & Pick<PrismaClient, "$transaction">, userId: string): Promise<RevokeResult> {
   const result = await revokeGoogleToken(await googleTokenToRevoke(db, userId));
 
   const active = await db.crawl.findMany({
@@ -93,6 +93,12 @@ export async function deleteAccount(db: Db, userId: string): Promise<RevokeResul
     "Stopped: the account was deleted"
   );
 
-  await db.user.delete({ where: { id: userId } });
+  await db.$transaction(async tx => {
+    // Hosted limit readings are keyed by device; local installation workers can be shared.
+    await tx.$executeRaw`DELETE FROM "ContentWorkerState" WHERE id IN (
+      SELECT 'hosted:' || id FROM "HostedDevice" WHERE "userId" = ${userId}
+    )`;
+    await tx.user.delete({ where: { id: userId } });
+  });
   return result;
 }

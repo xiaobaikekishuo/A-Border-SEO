@@ -101,10 +101,13 @@ describe("local account workbench", () => {
     ] };
     const complete = (value: unknown) => runWorkerAction(db, { action: "complete", jobId: id, leaseToken: job.leaseToken, result: value }, now);
     await expect(complete({ ...base, reportActions: [{ ...base.reportActions[0], evidenceRefs: ["audit:999"] }] })).rejects.toThrow("cite rows");
-    await expect(complete({ ...base, reportActions: [{ ...base.reportActions[0], reason: "See https://other.example/secret" }] })).rejects.toThrow();
-    await complete(base);
+    const withUnverifiedLink = [{ ...base.reportActions[0], reason: "See https://other.example/secret" }];
+    await complete({ ...base, reportActions: withUnverifiedLink });
     const history = await getWorkbenchWorkspace(db, user, site, now);
-    expect(history.jobs[0].result?.reportActions).toEqual(base.reportActions);
+    expect(history.jobs[0].result?.reportActions).toEqual(withUnverifiedLink);
+    expect(history.jobs[0].result?.linkReview).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: "reportActions", action: "KEPT_IN_NOTES", url: "https://other.example/secret" }),
+    ]));
     expect(history.jobs[0].reportSources).toMatchObject([{ ref: "audit:1", source: "audit" }]);
   });
   it("rejects anonymous and foreign owners and cross-site source IDs", async () => {

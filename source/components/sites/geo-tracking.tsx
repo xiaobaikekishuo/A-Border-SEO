@@ -160,23 +160,24 @@ function ReviewForm({ siteId, answer, onSaved }: { siteId: string; answer: Answe
   </div>;
 }
 
-function AnswerPanel({ siteId, answerId, onClose, onDeleted, onChanged }: { siteId: string; answerId: string; onClose: () => void; onDeleted: (workspace: TrackingWorkspace) => void; onChanged: (workspace: TrackingWorkspace) => void }) {
+function AnswerPanel({ siteId, answerId, onSelect, onClose, onDeleted, onChanged }: { siteId: string; answerId: string; onSelect: (id: string) => void; onClose: () => void; onDeleted: (workspace: TrackingWorkspace) => void; onChanged: (workspace: TrackingWorkspace) => void }) {
   const { t, locale } = useI18n();
   const [answer, setAnswer] = useState<Answer | null>(null);
-  const [current, setCurrent] = useState(answerId);
   const [error, setError] = useState("");
   useEffect(() => {
-    let live = true;
-    setError("");
-    fetch(`/api/sites/${siteId}/geo/tracking/answers?id=${encodeURIComponent(current)}`, { cache: "no-store" })
+    const controller = new AbortController();
+    fetch(`/api/sites/${encodeURIComponent(siteId)}/geo/tracking/answers?id=${encodeURIComponent(answerId)}`, { cache: "no-store", signal: controller.signal })
       .then(async res => {
         const body = await res.json().catch(() => null);
         if (!res.ok) throw new Error((typeof body?.error === "string" ? geoErrorMessage(body.error, t) : t("Could not load the answer.", "无法加载回答。")));
-        if (live) setAnswer(body as Answer);
+        if (!controller.signal.aborted) {
+          setAnswer(body as Answer);
+          setError("");
+        }
       })
-      .catch(e => { if (live) setError(e instanceof Error ? e.message : String(e)); });
-    return () => { live = false; };
-  }, [siteId, current, t]);
+      .catch(e => { if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e)); });
+    return () => controller.abort();
+  }, [siteId, answerId, t]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
@@ -230,7 +231,7 @@ function AnswerPanel({ siteId, answerId, onClose, onDeleted, onChanged }: { site
         {answer.history.length > 1 && <div>
           <div className="font-medium">{t("Earlier answers", "历史回答")}</div>
           <ul className="mt-1 space-y-0.5 text-xs">{answer.history.map(h => <li key={h.id}>
-            <button type="button" className={`text-left hover:underline ${h.id === answer.id ? "font-medium" : ""}`} onClick={() => setCurrent(h.id)}>
+            <button type="button" className={`text-left hover:underline ${h.id === answer.id ? "font-medium" : ""}`} onClick={() => onSelect(h.id)}>
               {new Date(h.createdAt).toLocaleDateString()}{h.sample > 0 ? ` #${h.sample + 1}` : ""} · {h.status === "OK" ? (h.ownCited ? t("cited", "引用") : h.ownMentioned ? t("named", "提及") : t("not named", "未提及")) : h.status === "NO_ANSWER" ? t("no AI answer", "无 AI 回答") : t("failed", "失败")}{h.source === "MANUAL" ? ` · ${t("by hand", "手动")}` : ""}{h.review?.accuracy ? ` · ${t(ACCURACY[h.review.accuracy][0], ACCURACY[h.review.accuracy][1])}` : ""}
             </button>
           </li>)}</ul>
@@ -676,6 +677,7 @@ export default function GeoTracking({ siteId, domain }: Props) {
       </div>
     </div>}
 
-    {openAnswer && <AnswerPanel siteId={siteId} answerId={openAnswer} onClose={() => setOpenAnswer(null)} onDeleted={next => apply(next, false)} onChanged={next => apply(next, false)} />}
+    {openAnswer && <AnswerPanel key={JSON.stringify([siteId, openAnswer])} siteId={siteId} answerId={openAnswer} onSelect={setOpenAnswer}
+      onClose={() => setOpenAnswer(id => id === openAnswer ? null : id)} onDeleted={next => apply(next, false)} onChanged={next => apply(next, false)} />}
   </section>;
 }

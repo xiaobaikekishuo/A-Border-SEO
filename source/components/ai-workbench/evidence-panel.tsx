@@ -25,25 +25,20 @@ export function EvidencePanel({
   disabled: boolean;
 }) {
   const { t, locale } = useI18n();
-  const [evidence, setEvidence] = useState<DiagnosticEvidence | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ url: string; revision: number; evidence: DiagnosticEvidence | null; error: string | null } | null>(null);
   const [revision, setRevision] = useState(0);
   const [lookup, setLookup] = useState("");
-  const selectionKey = JSON.stringify(selection);
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(selection)) if (typeof value === "string" && value) params.set(key, value);
+  const url = selection.pageId || selection.url || selection.query ? `/api/sites/${encodeURIComponent(siteId)}/assistant/evidence?${params}` : null;
+  const current = result?.url === url && result.revision === revision ? result : null;
+  const evidence = current?.evidence;
+  const error = current?.error;
+  const loading = url !== null && current === null;
   useEffect(() => {
-    const selected = JSON.parse(selectionKey) as DiagnosticSelection;
-    setEvidence(null);
-    setError(null);
-    if (!selected.pageId && !selected.url && !selected.query) {
-      setLoading(false);
-      return;
-    }
+    if (!url) return;
     const controller = new AbortController();
-    const params = new URLSearchParams();
-    for (const [key, value] of Object.entries(selected)) if (typeof value === "string" && value) params.set(key, value);
-    setLoading(true);
-    void fetch(`/api/sites/${encodeURIComponent(siteId)}/assistant/evidence?${params}`, { cache: "no-store", signal: controller.signal })
+    void fetch(url, { cache: "no-store", signal: controller.signal })
       .then(async response => {
         const value = await response.json();
         if (!response.ok) throw new Error(value.error || "evidence_failed");
@@ -51,16 +46,13 @@ export function EvidencePanel({
         return value as DiagnosticEvidence;
       })
       .then(value => {
-        if (!controller.signal.aborted) setEvidence(value);
+        if (!controller.signal.aborted) setResult({ url, revision, evidence: value, error: null });
       })
       .catch(cause => {
-        if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "evidence_failed");
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) setResult({ url, revision, evidence: null, error: cause instanceof Error ? cause.message : "evidence_failed" });
       });
     return () => controller.abort();
-  }, [siteId, selectionKey, revision]);
+  }, [siteId, url, revision]);
   const selectedUrl = evidence?.page?.url ?? evidence?.selection.url;
   const dateText = (date: string) => new Date(date).toLocaleString(locale === "zh" ? "zh-CN" : "en-US");
   const selectedPages =

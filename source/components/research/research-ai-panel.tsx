@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
+import { useResearchMode } from "./use-research-mode";
 import Link from "next/link";
 import { Copy, Download, Loader2, RefreshCw, Search, Sparkles, Square } from "lucide-react";
 import { useI18n } from "@/lib/i18n/client";
@@ -38,15 +39,10 @@ export function ResearchAiModes({
   children: ReactNode;
 }) {
   const { t } = useI18n();
-  const [mode, setMode] = useState<"sources" | "chatgpt">("sources");
+  const linkedAi = useResearchMode() === "chatgpt";
+  const [selectedMode, setMode] = useState<"sources" | "chatgpt" | null>(null);
+  const mode = selectedMode ?? (linkedAi ? "chatgpt" : "sources");
   const [openedAi, setOpenedAi] = useState(false);
-  useEffect(() => {
-    const query = new URLSearchParams(window.location.search);
-    if (query.get("mode") === "chatgpt" || query.has("chatgpt")) {
-      setMode("chatgpt");
-      setOpenedAi(true);
-    }
-  }, []);
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap gap-3" role="group" aria-label={t("Research mode", "研究方式")}>
@@ -73,7 +69,7 @@ export function ResearchAiModes({
         </button>
       </div>
       <div hidden={mode !== "sources"}>{children}</div>
-      {openedAi && (
+      {(openedAi || linkedAi) && (
         <div hidden={mode !== "chatgpt"}>
           <ResearchAiPanel key={`${siteId}:${kind}`} siteId={siteId} domain={domain} kind={kind} />
         </div>

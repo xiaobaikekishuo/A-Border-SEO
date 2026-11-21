@@ -217,11 +217,18 @@ describe("deleteAccount", () => {
   it("leaves a second user's data untouched", async () => {
     await seedUser("u1");
     await seedUser("u2");
+    for (const uid of ["u1", "u2"]) {
+      await db.hostedDevice.create({ data: { id: uid, userId: uid, issuer: "qa", accountId: uid, installationId: uid,
+        productId: "qa", sessionBinding: "qa", desktopVersion: "1.9.2" } });
+      await db.contentWorkerState.create({ data: { id: `hosted:${uid}`, lastSeenAt: new Date(), limits: { primary: { usedPercent: 10 } } } });
+    }
     const before = await rowsOf("u2");
     revokeMock();
 
     await deleteAccount(db, "u1");
     expect(await rowsOf("u2")).toEqual(before);
+    expect(await db.contentWorkerState.findUnique({ where: { id: "hosted:u1" } })).toBeNull();
+    expect(await db.contentWorkerState.findUnique({ where: { id: "hosted:u2" } })).not.toBeNull();
   });
 
   it("deletes the account when the revoke fails", async () => {
@@ -240,7 +247,7 @@ describe("schema", () => {
     const models = Prisma.dmmf.datamodel.models;
     // Keep this exemption narrow: adding user data must revisit ownership.
     const contentWorker = models.find((model) => model.name === "ContentWorkerState");
-    expect(contentWorker?.fields.map((field) => field.name).sort()).toEqual(["id", "lastSeenAt"]);
+    expect(contentWorker?.fields.map((field) => field.name).sort()).toEqual(["capabilities", "id", "lastSeenAt", "limits", "limitsAt", "limitsError", "models"]);
     // The installation identifier has no account, grant, token or user data.
     const chatGptHost = models.find((model) => model.name === "ChatGptHost");
     expect(chatGptHost?.fields.map((field) => field.name).sort()).toEqual(["hostId", "id"]);

@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 // and reading a structured result back. Manus itself is a stubbed fetch.
 
 const holder = vi.hoisted(() => ({ db: null as PrismaClient | null }));
+vi.mock("@/lib/auth", () => ({ auth: vi.fn() }));
 vi.mock("@/lib/db", async () => {
   const { lazyDb } = await import("@/lib/testing/pglite");
   return { db: lazyDb(holder) };

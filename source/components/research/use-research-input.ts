@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { ResearchLanguage } from "@/lib/dataforseo/market";
 import { presetLanguage, useSiteMarketLanguage } from "@/components/ai-workbench/output-language";
 import { appendResearchFocus, getResearchDefaults, type PromptKind } from "./research-prompt-presets";
@@ -13,27 +13,26 @@ type ResearchFields = { language: ResearchLanguage; targetMarket: string; instru
  * and instructions follow that language while they are untouched.
  */
 export function useResearchInput<I extends ResearchFields>(siteId: string, kind: PromptKind, initial: () => I) {
-  const [input, setInput] = useState<I>(initial);
+  const [draft, setInput] = useState<I>(initial);
   const marketLanguage = useSiteMarketLanguage(siteId);
-  const languageTouched = useRef(false);
-  useEffect(() => {
-    if (!marketLanguage || languageTouched.current) return;
-    setInput(current => {
-      const before = getResearchDefaults(kind, presetLanguage(current.language));
-      const unchanged = current.targetMarket === before.targetMarket && current.instructions === before.instructions;
-      return { ...current, language: marketLanguage, ...(unchanged ? getResearchDefaults(kind, presetLanguage(marketLanguage)) : {}) };
-    });
-  }, [marketLanguage, kind]);
-  const patch = (value: Partial<I>) => setInput(current => ({ ...current, ...value }));
+  const [languageTouched, setLanguageTouched] = useState(false);
+  let input = draft;
+  if (marketLanguage && !languageTouched && marketLanguage !== draft.language) {
+    const before = getResearchDefaults(kind, presetLanguage(draft.language));
+    const unchanged = draft.targetMarket === before.targetMarket && draft.instructions === before.instructions;
+    input = { ...draft, language: marketLanguage, ...(unchanged ? getResearchDefaults(kind, presetLanguage(marketLanguage)) : {}) };
+  }
+  const patch = (value: Partial<I>) => setInput({ ...input, ...value });
   /** The owner's choice: the market language no longer replaces it. */
   const chooseLanguage = (language: ResearchLanguage) => {
-    languageTouched.current = true;
+    setLanguageTouched(true);
     patch({ language } as Partial<I>);
   };
   /** Adds a focus prompt to the instructions; false when they would grow past 6,000 characters. */
   const addFocus = (prompt: string) => {
-    if (appendResearchFocus(input.instructions, prompt) === null) return false;
-    setInput(current => ({ ...current, instructions: appendResearchFocus(current.instructions, prompt) ?? current.instructions }));
+    const instructions = appendResearchFocus(input.instructions, prompt);
+    if (instructions === null) return false;
+    setInput({ ...input, instructions });
     return true;
   };
   return { input, patch, chooseLanguage, addFocus };

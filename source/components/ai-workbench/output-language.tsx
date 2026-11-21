@@ -1,18 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useI18n } from "@/lib/i18n/client";
 import { defaultOutputLanguage, isResearchLanguage, RESEARCH_LANGUAGES, type ResearchLanguage } from "@/lib/dataforseo/market";
 
 /** The site's market language (Site.researchLanguage), or null until it is known. */
 export function useSiteMarketLanguage(siteId: string): ResearchLanguage | null {
-  const [language, setLanguage] = useState<ResearchLanguage | null>(null);
+  const [saved, setSaved] = useState<{siteId: string; language: ResearchLanguage} | null>(null);
   useEffect(() => {
     let alive = true;
     fetch(`/api/sites/${encodeURIComponent(siteId)}/research-settings`, { cache: "no-store" })
       .then(res => (res.ok ? res.json() : null))
       .then((body: { language?: unknown } | null) => {
-        if (alive && isResearchLanguage(body?.language)) setLanguage(body.language);
+        if (alive && isResearchLanguage(body?.language)) setSaved({ siteId, language: body.language });
       })
       .catch(() => {
         /* the interface language stays the default */
@@ -21,7 +21,7 @@ export function useSiteMarketLanguage(siteId: string): ResearchLanguage | null {
       alive = false;
     };
   }, [siteId]);
-  return language;
+  return saved?.siteId === siteId ? saved.language : null;
 }
 
 /**
@@ -31,15 +31,11 @@ export function useSiteMarketLanguage(siteId: string): ResearchLanguage | null {
 export function useOutputLanguage(siteId: string) {
   const { locale } = useI18n();
   const market = useSiteMarketLanguage(siteId);
-  const [language, setLanguage] = useState<ResearchLanguage>(() => defaultOutputLanguage(null, locale));
-  const touched = useRef(false);
-  useEffect(() => {
-    if (market && !touched.current) setLanguage(market);
-  }, [market]);
+  const [choice, setChoice] = useState<{siteId: string; language: ResearchLanguage} | null>(null);
+  const language = choice?.siteId === siteId ? choice.language : defaultOutputLanguage(market, locale);
   const choose = (value: string) => {
     if (!isResearchLanguage(value)) return;
-    touched.current = true;
-    setLanguage(value);
+    setChoice({ siteId, language: value });
   };
   return { language, choose, market };
 }

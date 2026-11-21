@@ -9,24 +9,39 @@ import { QualityChecklist } from "./review-quality";
 import s from "./planner.module.css";
 import b from "./bulk.module.css";
 
-export function ArticleReviewPanel({ siteId, pillars, job, busy, active, workerOnline, onSubmit, onJob, onRefresh }: {
+type ArticleReviewProps = {
   siteId: string; pillars: Pillar[]; job?: PlanJob; busy: boolean; active: boolean; workerOnline: boolean;
   onSubmit: (action: Mutation) => Promise<Record<string, unknown> | null>; onJob: (id: string) => void; onRefresh: () => void;
-}) {
+};
+
+export function ArticleReviewPanel(props: ArticleReviewProps) {
+  const articleIds = props.job?.reviewResult?.articles.map(article => article.pageId);
+  return <ArticleReviewForm key={JSON.stringify([props.siteId, props.job?.id, articleIds])} {...props} />;
+}
+
+function ArticleReviewForm({ siteId, pillars, job, busy, active, workerOnline, onSubmit, onJob, onRefresh }: ArticleReviewProps) {
   const { t } = useI18n();
-  const [inventory, setInventory] = useState<ImportablePagesResponse | null>(null);
+  const [result, setResult] = useState<{ url: string; inventory: ImportablePagesResponse | null } | null>(null);
   const [page, setPage] = useState(1); const [query, setQuery] = useState(""); const [articlesOnly, setArticlesOnly] = useState(true);
   const [selected, setSelected] = useState<ImportablePage[]>([]); const [text, setText] = useState<Record<string, string>>({});
-  const [error, setError] = useState<string | null>(null); const [loading, setLoading] = useState(false);
-  const [accepted, setAccepted] = useState<string[]>([]);
-  useEffect(() => { setAccepted(job?.reviewResult?.articles.map(article => article.pageId) ?? []); }, [job?.id, job?.reviewResult]);
+  const [accepted, setAccepted] = useState(() => job?.reviewResult?.articles.map(article => article.pageId) ?? []);
+  const params = new URLSearchParams({ page: String(page), pageSize: "25", query, articlesOnly: String(articlesOnly) });
+  const url = job ? null : `/api/sites/${encodeURIComponent(siteId)}/content/pages?${params}`;
+  const current = result?.url === url ? result : null;
+  const inventory = current?.inventory;
+  const error = current && !inventory ? t("Could not load article inventory", "无法读取文章库存") : null;
+  const loading = url !== null && current === null;
   useEffect(() => {
-    if (job) return;
-    const controller = new AbortController(); setLoading(true); setError(null);
-    const params = new URLSearchParams({ page: String(page), pageSize: "25", query, articlesOnly: String(articlesOnly) });
-    void fetch(`/api/sites/${encodeURIComponent(siteId)}/content/pages?${params}`, { signal: controller.signal }).then(async response => { if (!response.ok) throw new Error(t("Could not load article inventory", "无法读取文章库存")); setInventory(await response.json()); }).catch(cause => { if (!controller.signal.aborted) setError(cause.message); }).finally(() => { if (!controller.signal.aborted) setLoading(false); });
+    if (!url) return;
+    const controller = new AbortController();
+    void fetch(url, { signal: controller.signal }).then(async response => {
+      const inventory: ImportablePagesResponse | null = response.ok ? await response.json() : null;
+      if (!controller.signal.aborted) setResult({ url, inventory });
+    }).catch(() => {
+      if (!controller.signal.aborted) setResult({ url, inventory: null });
+    });
     return () => controller.abort();
-  }, [siteId, page, query, articlesOnly, job, t]);
+  }, [url]);
   if (job) return <div className={s.proposalReview}>
     {job.status === "FAILED" && <p role="alert">{t("Review failed. Existing articles were preserved.", "复核失败，已有文章保持原状。")} {job.error}</p>}
     {["QUEUED", "RUNNING"].includes(job.status) && <p role="status">{t("Reviewing selected article excerpts using your ChatGPT account. Results require your review before applying.", "正在通过 ChatGPT 账号复核所选文章摘要，完成后需你审阅并采纳。")}</p>}

@@ -143,11 +143,14 @@ export async function runWorkbenchLease(db: WorkbenchDb, action: LeaseAction, no
     return { ok: true, leaseExpiresAt: leaseExpiresAt.toISOString() };
   }
   const usage = action.usage ? storedUsage(aiUsageSchema.parse(action.usage)) : null;
-  const request = workbenchRequestSchema.parse(job.request);
-  if (usage && (usage.source !== "CODEX_CLI" || (!hostedMode() && request.provider !== "CODEX_LOCAL"))) throw new ContentError("Worker usage does not match this job's provider", 409);
-  const result = action.action === "complete" ? validateWorkbenchResult(action.result, job.site.domain, job.context, request.language, request) : null;
-  if (result) validateKeywordIdeas(result, request);
-  if (result) validateResearchResult(result, request);
+  // Failing a lease without usage must also work for older or invalid requests.
+  const request = action.action === "complete" || usage ? workbenchRequestSchema.parse(job.request) : undefined;
+  if (usage && (usage.source !== "CODEX_CLI" || (!hostedMode() && request?.provider !== "CODEX_LOCAL"))) throw new ContentError("Worker usage does not match this job's provider", 409);
+  const result = action.action === "complete" && request ? validateWorkbenchResult(action.result, job.site.domain, job.context, request.language, request) : null;
+  if (result && request) {
+    validateKeywordIdeas(result, request);
+    validateResearchResult(result, request);
+  }
   if (result?.paragraphEdits?.length && job.kind !== "REWRITE_ARTICLE") throw new ContentError("Paragraph edits are only supported for rewrite tasks");
   const sourceBody = job.context && typeof job.context === "object" && !Array.isArray(job.context) && typeof job.context.body === "string" ? job.context.body : null;
   const draftText = result && job.kind === "REWRITE_ARTICLE" && result.paragraphEdits?.length && sourceBody ? sourceBody : result?.contentMarkdown;
@@ -156,14 +159,14 @@ export async function runWorkbenchLease(db: WorkbenchDb, action: LeaseAction, no
     ...(result ? { result: result as Prisma.InputJsonValue, draftText } : {}),
     ...(usage ? { usage: usage as Prisma.InputJsonValue } : {}) } });
   if (!changed.count) throw new ContentError("Job lease is no longer valid", 409);
-  if (result && job.kind === "TOPIC_BRIEF") {
+  if (result && request && job.kind === "TOPIC_BRIEF") {
     // The brief goes into its topic when the topic still has none (lib/ai-workbench/tools/topic-brief.ts).
     try {
       const { applyTopicBrief } = await import("./tools/topic-brief");
       await applyTopicBrief(db, job.siteId, request, result);
     } catch (error) { console.error("[workbench] topic brief not applied:", error instanceof Error ? error.message : error); }
   }
-  if (result && request.schedule === "WEEKLY") {
+  if (result && request?.schedule === "WEEKLY") {
     // The weekly action list goes to the owner's email and webhook. A failure
     // to queue the delivery never fails the finished task.
     try {

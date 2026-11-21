@@ -4,7 +4,8 @@ import { useUiText } from "@/components/ui/ui-text";
 
 
 import { useResearchControls } from "./research-controls";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useResearchMode } from "./use-research-mode";
 import { KeywordAiPanel } from "./keyword-ai-panel";
 import { ManusKeywordPanel } from "./manus-keyword-panel";
 import { useI18n } from "@/lib/i18n/client";
@@ -38,14 +39,11 @@ export function KeywordResearchClient({
 }) {
   const ui = useUiText();
   const { t } = useI18n();
-  const [mode, setMode] = useState<"sources" | "chatgpt" | "manus">("sources");
+  const linkedMode = useResearchMode();
+  const [selectedMode, setMode] = useState<"sources" | "chatgpt" | "manus" | null>(null);
+  const mode = selectedMode ?? linkedMode;
   const [openedAi, setOpenedAi] = useState(false);
   const [openedManus, setOpenedManus] = useState(false);
-  useEffect(() => {
-    const query = new URLSearchParams(window.location.search);
-    if (query.get("mode") === "chatgpt" || query.has("chatgpt")) { setMode("chatgpt"); setOpenedAi(true); }
-    if (query.get("mode") === "manus") { setMode("manus"); setOpenedManus(true); }
-  }, []);
   return <div className="space-y-6">
     <div className="flex flex-wrap gap-3" role="group" aria-label={ui.locale === "zh" ? "关键词研究方式" : "Keyword research mode"}>
       <button type="button" aria-pressed={mode === "sources"} onClick={() => setMode("sources")} className={buttonVariants({ variant: mode === "sources" ? "default" : "outline" })}><Search size={16} />{ui.locale === "zh" ? "现有数据与联想词" : "Search data and suggestions"}</button>
@@ -53,8 +51,8 @@ export function KeywordResearchClient({
       <button type="button" aria-pressed={mode === "manus"} onClick={() => { setMode("manus"); setOpenedManus(true); }} className={buttonVariants({ variant: mode === "manus" ? "default" : "outline" })}><Telescope size={16} />{t("Manus deep research", "Manus 深度研究")}</button>
     </div>
     <div hidden={mode !== "sources"}><KeywordDataResearch siteId={siteId} hasDataForSEO={hasDataForSEO} /></div>
-    {openedAi && <div hidden={mode !== "chatgpt"}><KeywordAiPanel key={siteId} siteId={siteId} /></div>}
-    {openedManus && <div hidden={mode !== "manus"}><ManusKeywordPanel key={siteId} siteId={siteId} /></div>}
+    {(openedAi || linkedMode === "chatgpt") && <div hidden={mode !== "chatgpt"}><KeywordAiPanel key={siteId} siteId={siteId} /></div>}
+    {(openedManus || linkedMode === "manus") && <div hidden={mode !== "manus"}><ManusKeywordPanel key={siteId} siteId={siteId} /></div>}
   </div>;
 }
 

@@ -31,7 +31,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Failed to extract the packaged resources.' }
     $resources = Join-Path $scratch 'resources'
     $expected = @('app-update.yml', 'app.asar', 'default_app.asar', 'elevate.exe', 'hosted-workspace.json',
-        'icon.png', 'LICENSE.txt', 'local-worker/index.mjs', 'local-worker/lib.mjs', 'managed-protocol.mjs', 'management-config.json')
+        'icon.png', 'LICENSE.txt', 'local-worker/index.mjs', 'local-worker/lib.mjs', 'local-worker/app-server.mjs', 'managed-protocol.mjs', 'management-config.json')
     $actual = @(Get-ChildItem -LiteralPath $resources -File -Recurse -Force | ForEach-Object {
         [IO.Path]::GetRelativePath($resources, $_.FullName).Replace('\', '/')
     })
@@ -46,7 +46,8 @@ try {
 
     $profile = Join-Path $scratch 'isolated-profile'
     $smoke = Join-Path $root 'desktop/test/packaged-hosted-smoke.cjs'
-    $process = [Diagnostics.ProcessStartInfo]::new((Join-Path $root 'desktop/node_modules/electron/dist/electron.exe'))
+    $electron = & (Join-Path $PSScriptRoot 'resolve-smoke-electron.ps1')
+    $process = [Diagnostics.ProcessStartInfo]::new($electron)
     $process.UseShellExecute = $false
     $process.CreateNoWindow = $true
     $process.WindowStyle = 'Hidden'

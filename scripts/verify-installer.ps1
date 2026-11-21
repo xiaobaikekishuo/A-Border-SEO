@@ -47,7 +47,7 @@ function Test-HostedResources([string]$Resources) {
     foreach ($legacy in @('windows', 'powershell', 'release-manifest.json')) {
         if (Test-Path -LiteralPath (Join-Path $Resources $legacy)) { throw "Unexpected hosted resource: $legacy." }
     }
-    foreach ($file in @('app.asar', 'app-update.yml', 'managed-protocol.mjs', 'local-worker/index.mjs', 'local-worker/lib.mjs')) {
+    foreach ($file in @('app.asar', 'app-update.yml', 'managed-protocol.mjs', 'local-worker/index.mjs', 'local-worker/lib.mjs', 'local-worker/app-server.mjs')) {
         if ((Get-Item -LiteralPath (Join-Path $Resources $file)).Length -lt 1) { throw "Empty hosted resource: $file." }
     }
     foreach ($pair in @(
@@ -107,6 +107,7 @@ if ($Publisher) {
 }
 
 if ($InstallSmoke) {
+    if ($Hosted) { $electron = & (Join-Path $PSScriptRoot 'resolve-smoke-electron.ps1') }
     $product = 'A-Border SEO'
     # NSIS derives this GUID from the immutable appId com.aborder.seo.
     $productGuid = 'a5e389d3-f855-5880-a3cd-8c05bca8902c'
@@ -149,7 +150,6 @@ if ($InstallSmoke) {
             $installedResources = Join-Path $installDir 'resources'
             Test-HostedResources $installedResources
             $smokeProfile = Join-Path ([IO.Path]::GetTempPath()) ("aborder-smoke-" + [guid]::NewGuid().ToString('N'))
-            $electron = Join-Path $desktop 'node_modules/electron/dist/electron.exe'
             $harness = Join-Path $desktop 'test/packaged-hosted-smoke.cjs'
             $mode = if ($Publisher) { 'signed' } else { 'unsigned' }
             $process = Start-Process -FilePath $electron -ArgumentList @("`"$harness`"", "`"$installedResources`"", "`"$smokeProfile`"", $mode) -WindowStyle Hidden -PassThru -Wait

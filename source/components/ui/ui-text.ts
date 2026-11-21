@@ -464,7 +464,6 @@ export function useUiText(): UiTranslator {
       const translated = locale === "zh" ? messages[source] ?? (messages[trimmed] ? source.replace(trimmed, messages[trimmed]) : source) : source;
       return interpolate(translated, values);
     };
-    ui.locale = locale;
-    return ui;
+    return Object.assign(ui, { locale });
   }, [locale]);
 }

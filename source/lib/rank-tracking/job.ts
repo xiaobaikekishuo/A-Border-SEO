@@ -199,7 +199,7 @@ export async function finishRun(db: PrismaClient, runId: string): Promise<void> 
   const run = await db.rankRun.findUnique({ where: { id: runId }, select: { siteId: true, planned: true, budgetUsd: true, error: true, errorCode: true } }) as
     { siteId: string; planned: number; budgetUsd: number; error: string | null; errorCode: string | null } | null;
   if (!run) return;
-  const counts = await db.rankCheck.groupBy({ by: ["status"], where: { runId }, _count: { _all: true } }) as { status: string; _count: { _all: number } }[];
+  const counts = await db.rankCheck.groupBy({ by: ["status"], where: { runId }, _count: { _all: true } });
   const count = (status: string) => counts.find(c => c.status === status)?._count._all ?? 0;
   const ok = count("OK"), failed = count("FAILED");
   const checks = counts.reduce((sum, c) => sum + c._count._all, 0);
@@ -253,7 +253,7 @@ async function collectRun(db: PrismaClient, run: RunRow, ready: ReadyTask[], cre
   }
   const left = await db.rankCheck.count({ where: { runId: run.id, status: { in: ["PENDING", "QUEUED"] } } }) as number;
   if (left && sincePosted < COLLECT_WINDOW_MS) {
-    const counts = await db.rankCheck.groupBy({ by: ["status"], where: { runId: run.id, status: { in: ["OK", "FAILED"] } }, _count: { _all: true } }) as { status: string; _count: { _all: number } }[];
+    const counts = await db.rankCheck.groupBy({ by: ["status"], where: { runId: run.id, status: { in: ["OK", "FAILED"] } }, _count: { _all: true } });
     const done = counts.reduce((sum, c) => sum + c._count._all, 0);
     const failed = counts.find(c => c.status === "FAILED")?._count._all ?? 0;
     await db.rankRun.update({ where: { id: run.id }, data: { done, failed } });

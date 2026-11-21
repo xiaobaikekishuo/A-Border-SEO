@@ -50,13 +50,11 @@ export default async function GeoPage({params}:{params:Promise<{siteId:string}>}
 }
 
 async function GeoPlatformsPanel({ site }: { site: Parameters<typeof buildSiteOverview>[1] }) {
-  try {
-    const overview = await buildSiteOverview(db, site);
-    return <GeoPlatforms siteId={site.id} initialData={overview}/>;
-  } catch (error) {
+  const overview = await buildSiteOverview(db, site).catch(error => {
     console.error("GEO platform overview", error);
-    return <GeoPlatforms siteId={site.id} initialData={null}/>;
-  }
+    return null;
+  });
+  return <GeoPlatforms siteId={site.id} initialData={overview}/>;
 }
 
 // Rendered only after the page has checked the session and site ownership.

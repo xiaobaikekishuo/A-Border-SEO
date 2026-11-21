@@ -1,6 +1,6 @@
 "use client";
 
-import { useUiText, identityUiText, type UiTranslator } from "@/components/ui/ui-text";
+import { useUiText } from "@/components/ui/ui-text";
 
 
 import { useDeferredValue, useMemo, useState } from "react";
@@ -81,7 +81,7 @@ export function KeywordsTable({ keywords }: { keywords: KeywordRow[] }) {
     position,
     minClicksNum,
     minImpressionsNum,
-    sort,, ui
+    sort,
   ]);
 
   const hasActiveFilters =

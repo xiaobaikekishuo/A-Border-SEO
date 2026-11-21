@@ -103,7 +103,7 @@ async function loadSearchSeries(tx: Prisma.TransactionClient, siteId: string, pe
     const days = dates.length ? await tx.$queryRaw<{ date: Date; clicks: number; impressions: number; weighted: number }[]>`
       SELECT date, SUM(clicks)::float8 AS clicks, SUM(impressions)::float8 AS impressions,
         SUM(position * impressions)::float8 AS weighted
-      FROM "Page" WHERE "siteId" = ${siteId} AND date IN (${Prisma.join(dates)})
+      FROM "Page" WHERE "siteId" = ${siteId} AND date IN (${Prisma.join(dates.map(d => Prisma.sql`${d.toISOString()}::timestamp`))})
       GROUP BY date ORDER BY date` : [];
     rows = days.map(day => ({ date: label(new Date(day.date)), clicks: Number(day.clicks), impressions: Number(day.impressions),
       position: Number(day.impressions) > 0 ? Number(day.weighted) / Number(day.impressions) : 0 }));
@@ -125,7 +125,7 @@ export async function getSitePeriodMetrics(siteId: string, days = 28) {
       const known = dates.filter(day => day.queryPagesComplete).map(day => day.date);
       if (!known.length) return 0;
       const [row] = await tx.$queryRaw<{ count: number }[]>`
-        SELECT COUNT(DISTINCT query)::int AS count FROM "Keyword" WHERE "siteId" = ${siteId} AND date IN (${Prisma.join(known)})`;
+        SELECT COUNT(DISTINCT query)::int AS count FROM "Keyword" WHERE "siteId" = ${siteId} AND date IN (${Prisma.join(known.map(d => Prisma.sql`${d.toISOString()}::timestamp`))})`;
       return Number(row?.count ?? 0);
     };
     const current = aggregatePeriod(currentRows, await keywordCount(currentDates));

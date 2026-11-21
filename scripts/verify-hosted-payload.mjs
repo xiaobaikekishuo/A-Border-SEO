@@ -24,6 +24,7 @@ const resourcesToCheck = [
   ["source/lib/managed/protocol.mjs", "managed-protocol.mjs"],
   ["source/local-worker/index.mjs", "local-worker/index.mjs"],
   ["source/local-worker/lib.mjs", "local-worker/lib.mjs"],
+  ["source/local-worker/app-server.mjs", "local-worker/app-server.mjs"],
   ["desktop/hosted-workspace.json", "hosted-workspace.json"],
   ["desktop/build/management-config.json", "management-config.json"],
 ];
